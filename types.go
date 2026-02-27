@@ -2,15 +2,16 @@ package sigma
 
 // Condition represents a single field condition extracted from a Sigma rule.
 type Condition struct {
-	Field        string   // Field name (empty for keyword conditions)
-	Operator     string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "fieldref", "keyword"
-	Value        string   // The condition value
-	Negated      bool     // True if condition is negated (NOT)
-	PipeStage    int      // Always 0 for Sigma (no pipeline stages)
-	LogicalOp    string   // "AND" or "OR" connecting to previous condition
-	Alternatives []string // Multiple values grouped by OR on same field
-	IsComputed   bool     // Always false for Sigma (no computed fields)
-	SourceField  string   // Always empty for Sigma
+	Field         string   // Field name (empty for keyword conditions)
+	Operator      string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "fieldref", "keyword"
+	Value         string   // The condition value
+	Negated       bool     // True if condition is negated (NOT)
+	CaseSensitive bool     // True if |cased modifier is used (matching must be case-sensitive)
+	PipeStage     int      // Always 0 for Sigma (no pipeline stages)
+	LogicalOp     string   // "AND" or "OR" connecting to previous condition
+	Alternatives  []string // Multiple values grouped by OR on same field
+	IsComputed    bool     // Always false for Sigma (no computed fields)
+	SourceField   string   // Always empty for Sigma
 }
 
 // ParseResult holds the complete extraction result from a Sigma rule.

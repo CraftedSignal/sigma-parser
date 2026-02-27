@@ -658,3 +658,46 @@ func TestClassifyFieldProvenance_AlwaysMain(t *testing.T) {
 		t.Error("expected ProvenanceMain for all Sigma fields")
 	}
 }
+
+func TestExtractConditions_CasedModifier(t *testing.T) {
+	yaml := `
+title: Case Sensitive Match
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith|cased: 'cmd.exe'
+        CommandLine|contains: 'whoami'
+    condition: selection
+level: medium
+`
+	result := ExtractConditions(yaml)
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+
+	var casedCond, normalCond *Condition
+	for i := range result.Conditions {
+		if result.Conditions[i].Operator == "endswith" {
+			casedCond = &result.Conditions[i]
+		}
+		if result.Conditions[i].Operator == "contains" {
+			normalCond = &result.Conditions[i]
+		}
+	}
+
+	if casedCond == nil {
+		t.Fatal("expected endswith condition")
+	}
+	if !casedCond.CaseSensitive {
+		t.Error("expected CaseSensitive=true for |endswith|cased")
+	}
+
+	if normalCond == nil {
+		t.Fatal("expected contains condition")
+	}
+	if normalCond.CaseSensitive {
+		t.Error("expected CaseSensitive=false for |contains without |cased")
+	}
+}

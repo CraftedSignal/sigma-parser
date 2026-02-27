@@ -128,9 +128,10 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 	// Single value
 	if len(modResult.values) == 1 {
 		cond := Condition{
-			Field:    field,
-			Operator: modResult.operator,
-			Value:    modResult.values[0],
+			Field:         field,
+			Operator:      modResult.operator,
+			Value:         modResult.values[0],
+			CaseSensitive: modResult.caseSensitive,
 		}
 		// Bare wildcard → exists
 		if cond.Value == "*" && cond.Operator == "=" {
@@ -145,9 +146,10 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 		conds := make([]Condition, len(modResult.values))
 		for i, v := range modResult.values {
 			conds[i] = Condition{
-				Field:    field,
-				Operator: modResult.operator,
-				Value:    v,
+				Field:         field,
+				Operator:      modResult.operator,
+				Value:         v,
+				CaseSensitive: modResult.caseSensitive,
 			}
 			if i > 0 {
 				conds[i].LogicalOp = "AND"
@@ -158,10 +160,11 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 
 	// OR: group into single condition with alternatives
 	cond := Condition{
-		Field:        field,
-		Operator:     modResult.operator,
-		Value:        modResult.values[0],
-		Alternatives: modResult.values,
+		Field:         field,
+		Operator:      modResult.operator,
+		Value:         modResult.values[0],
+		Alternatives:  modResult.values,
+		CaseSensitive: modResult.caseSensitive,
 	}
 	return []Condition{cond}, nil
 }

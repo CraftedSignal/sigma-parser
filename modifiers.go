@@ -8,9 +8,10 @@ import (
 
 // modifierResult holds the parsed result of applying a modifier chain.
 type modifierResult struct {
-	operator string   // Canonical operator for the condition
-	allOf    bool     // True if list values should be AND'd (not OR'd)
-	values   []string // Transformed/expanded values
+	operator      string   // Canonical operator for the condition
+	allOf         bool     // True if list values should be AND'd (not OR'd)
+	caseSensitive bool     // True if |cased modifier is present
+	values        []string // Transformed/expanded values
 }
 
 // parseModifiers parses a field name with modifiers (e.g. "FieldName|contains|all")
@@ -59,6 +60,8 @@ func parseModifiers(fieldWithMods string, values []string) (field string, result
 			result.values = applyUTF16BE(result.values)
 		case "windash":
 			result.values = applyWindash(result.values)
+		case "cased":
+			result.caseSensitive = true
 		case "expand":
 			// Placeholder expansion — values pass through as-is.
 			// Real expansion requires environment variable context.

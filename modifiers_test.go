@@ -234,3 +234,49 @@ func TestParseModifiers_ChainedModifiers(t *testing.T) {
 		t.Log("Note: base64+contains chain produced:", result.values)
 	}
 }
+
+func TestParseModifiers_Cased(t *testing.T) {
+	field, result := parseModifiers("FieldName|cased", []string{"CasedValue"})
+	if field != "FieldName" {
+		t.Errorf("expected field 'FieldName', got %q", field)
+	}
+	if result.operator != "=" {
+		t.Errorf("expected operator '=', got %q", result.operator)
+	}
+	if !result.caseSensitive {
+		t.Error("expected caseSensitive=true for |cased modifier")
+	}
+}
+
+func TestParseModifiers_ContainsCased(t *testing.T) {
+	field, result := parseModifiers("CommandLine|contains|cased", []string{"Mimikatz"})
+	if field != "CommandLine" {
+		t.Errorf("expected field 'CommandLine', got %q", field)
+	}
+	if result.operator != "contains" {
+		t.Errorf("expected operator 'contains', got %q", result.operator)
+	}
+	if !result.caseSensitive {
+		t.Error("expected caseSensitive=true for |contains|cased chain")
+	}
+}
+
+func TestParseModifiers_CasedAll(t *testing.T) {
+	_, result := parseModifiers("Image|endswith|cased|all", []string{"cmd.exe", "powershell.exe"})
+	if result.operator != "endswith" {
+		t.Errorf("expected operator 'endswith', got %q", result.operator)
+	}
+	if !result.caseSensitive {
+		t.Error("expected caseSensitive=true")
+	}
+	if !result.allOf {
+		t.Error("expected allOf=true")
+	}
+}
+
+func TestParseModifiers_NoCased(t *testing.T) {
+	_, result := parseModifiers("CommandLine|contains", []string{"test"})
+	if result.caseSensitive {
+		t.Error("expected caseSensitive=false when |cased not present")
+	}
+}
