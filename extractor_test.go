@@ -93,6 +93,82 @@ detection:
 	}
 }
 
+func TestExtractConditions_PreservesPositiveAndNegatedSameValue(t *testing.T) {
+	yaml := `
+title: Same Value Positive And Negated
+status: test
+level: medium
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        CommandLine|contains: ' /c '
+    filter:
+        CommandLine|contains: ' /c '
+    condition: selection and not filter
+`
+	result := ExtractConditions(yaml)
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+
+	var positive bool
+	var negated bool
+	for _, c := range result.Conditions {
+		if strings.EqualFold(c.Field, "CommandLine") && c.Operator == "contains" && c.Value == " /c " {
+			if c.Negated {
+				negated = true
+			} else {
+				positive = true
+			}
+		}
+	}
+	if !positive || !negated {
+		t.Fatalf("expected both positive and negated CommandLine conditions, got %+v", result.Conditions)
+	}
+}
+
+func TestExtractConditions_DoesNotGroupPositiveAndNegatedOR(t *testing.T) {
+	yaml := `
+title: Mixed Negated OR
+status: test
+level: medium
+logsource:
+    category: network_connection
+    product: windows
+detection:
+    selection_a:
+        DestinationIp: '8.8.8.8'
+    selection_b:
+        DestinationIp: '1.1.1.1'
+    condition: selection_a or not selection_b
+`
+	result := ExtractConditions(yaml)
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+
+	var positive bool
+	var negated bool
+	for _, c := range result.Conditions {
+		if strings.EqualFold(c.Field, "DestinationIp") && c.Operator == "=" {
+			if c.Negated && c.Value == "1.1.1.1" {
+				negated = true
+			}
+			if !c.Negated && c.Value == "8.8.8.8" {
+				positive = true
+			}
+			if len(c.Alternatives) > 1 {
+				t.Fatalf("positive and negated DestinationIp conditions should not be grouped: %+v", c)
+			}
+		}
+	}
+	if !positive || !negated {
+		t.Fatalf("expected separate positive and negated DestinationIp conditions, got %+v", result.Conditions)
+	}
+}
+
 func TestExtractConditions_OrConditions(t *testing.T) {
 	yaml := `
 title: Multiple Selections

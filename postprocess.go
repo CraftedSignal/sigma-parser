@@ -15,23 +15,14 @@ func groupORConditions(conditions []Condition) []Condition {
 		cond := conditions[i]
 
 		// Look ahead for OR conditions on the same field
-		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" {
-			fieldLower := strings.ToLower(cond.Field)
-			alternatives := []string{cond.Value}
-			// Include any existing alternatives from the first condition
-			if len(cond.Alternatives) > 0 {
-				alternatives = cond.Alternatives
-			}
+		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) {
+			alternatives := conditionAlternatives(cond)
 
 			j := i + 1
 			for j < len(conditions) {
 				next := conditions[j]
-				if next.LogicalOp == "OR" && strings.ToLower(next.Field) == fieldLower && next.Operator == cond.Operator {
-					if len(next.Alternatives) > 0 {
-						alternatives = append(alternatives, next.Alternatives...)
-					} else {
-						alternatives = append(alternatives, next.Value)
-					}
+				if next.LogicalOp == "OR" && sameConditionGroup(cond, next) {
+					alternatives = append(alternatives, conditionAlternatives(next)...)
 					j++
 				} else {
 					break
@@ -52,6 +43,20 @@ func groupORConditions(conditions []Condition) []Condition {
 	return result
 }
 
+func sameConditionGroup(a, b Condition) bool {
+	return strings.EqualFold(a.Field, b.Field) &&
+		a.Operator == b.Operator &&
+		a.Negated == b.Negated &&
+		a.CaseSensitive == b.CaseSensitive
+}
+
+func conditionAlternatives(cond Condition) []string {
+	if len(cond.Alternatives) > 0 {
+		return append([]string(nil), cond.Alternatives...)
+	}
+	return []string{cond.Value}
+}
+
 // deduplicateConditions removes duplicate conditions by field+operator+value.
 func deduplicateConditions(conditions []Condition) []Condition {
 	if len(conditions) == 0 {
@@ -62,7 +67,7 @@ func deduplicateConditions(conditions []Condition) []Condition {
 	result := make([]Condition, 0, len(conditions))
 
 	for _, cond := range conditions {
-		key := strings.ToLower(cond.Field) + "|" + cond.Operator + "|" + cond.Value
+		key := conditionDedupKey(cond)
 		if !seen[key] {
 			seen[key] = true
 			result = append(result, cond)
@@ -70,4 +75,20 @@ func deduplicateConditions(conditions []Condition) []Condition {
 	}
 
 	return result
+}
+
+func conditionDedupKey(cond Condition) string {
+	return strings.ToLower(cond.Field) + "|" +
+		cond.Operator + "|" +
+		cond.Value + "|" +
+		boolKey(cond.Negated) + "|" +
+		boolKey(cond.CaseSensitive) + "|" +
+		strings.Join(cond.Alternatives, "\x00")
+}
+
+func boolKey(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
 }
