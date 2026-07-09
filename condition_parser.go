@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -301,24 +302,27 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 	return result
 }
 
-// matchDetectionItems returns detection item names matching a pattern.
+// matchDetectionItems returns detection item names matching a pattern, sorted
+// for determinism. Without the sort, map iteration order made quantifier
+// evaluation ("N of selection_*", "all of them") non-deterministic, which
+// could reorder — and in turn drop — extracted conditions across runs.
 func matchDetectionItems(pattern string, items map[string]*detectionItem) []string {
+	var names []string
 	if pattern == "them" || pattern == "*" {
 		// Match all detection items
-		names := make([]string, 0, len(items))
+		names = make([]string, 0, len(items))
 		for name := range items {
 			names = append(names, name)
 		}
-		return names
-	}
-
-	// Glob matching with * wildcard
-	var names []string
-	for name := range items {
-		if globMatch(pattern, name) {
-			names = append(names, name)
+	} else {
+		// Glob matching with * wildcard
+		for name := range items {
+			if globMatch(pattern, name) {
+				names = append(names, name)
+			}
 		}
 	}
+	sort.Strings(names)
 	return names
 }
 

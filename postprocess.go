@@ -43,7 +43,16 @@ func groupORConditions(conditions []Condition) []Condition {
 	return result
 }
 
+// comparisonOperators are ordering operators for which OR-runs must NOT be
+// folded into Alternatives: `f > a OR f > b` is not a membership test over
+// {a, b}, so merging would silently drop a bound (and, because the merge is
+// position-dependent, make extraction non-deterministic).
+var comparisonOperators = map[string]bool{">": true, ">=": true, "<": true, "<=": true}
+
 func sameConditionGroup(a, b Condition) bool {
+	if comparisonOperators[a.Operator] {
+		return false
+	}
 	return strings.EqualFold(a.Field, b.Field) &&
 		a.Operator == b.Operator &&
 		a.Negated == b.Negated &&
