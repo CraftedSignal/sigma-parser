@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/craftedsignal/sigma-parser.svg)](https://pkg.go.dev/github.com/craftedsignal/sigma-parser)
 [![Go Report Card](https://goreportcard.com/badge/github.com/craftedsignal/sigma-parser)](https://goreportcard.com/report/github.com/craftedsignal/sigma-parser)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
 A production-ready Go parser for [Sigma](https://sigmahq.io/) detection rules. Extracts conditions, fields, and detection logic from YAML-based Sigma rules. Uses `yaml.v3` and a recursive descent condition parser (no ANTLR needed).
 
@@ -170,7 +170,7 @@ Contributions are welcome! Please ensure:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+AGPL-3.0 - see [LICENSE](LICENSE) for details.
 
 ## Related Projects
 
