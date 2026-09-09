@@ -2,21 +2,24 @@ package sigma
 
 // Condition represents a single field condition extracted from a Sigma rule.
 type Condition struct {
-	Field         string   // Field name (empty for keyword conditions)
-	Operator      string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "fieldref", "keyword"
-	Value         string   // The condition value
-	Negated       bool     // True if condition is negated (NOT)
-	CaseSensitive bool     // True if |cased modifier is used (matching must be case-sensitive)
-	PipeStage     int      // Always 0 for Sigma (no pipeline stages)
-	LogicalOp     string   // "AND" or "OR" connecting to previous condition
-	Alternatives  []string // Multiple values grouped by OR on same field
-	IsComputed    bool     // Always false for Sigma (no computed fields)
-	SourceField   string   // Always empty for Sigma
+	Field             string   // Field name (empty for keyword conditions)
+	Operator          string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "fieldref", "keyword"
+	Value             string   // The condition value
+	ValueReference    string   // Referenced field name for |fieldref
+	Negated           bool     // True if condition is negated (NOT)
+	CaseSensitive     bool     // True if |cased modifier is used (matching must be case-sensitive)
+	RequiresExpansion bool     // True if |expand placeholders require a processing pipeline
+	PipeStage         int      // Always 0 for Sigma (no pipeline stages)
+	LogicalOp         string   // "AND" or "OR" connecting to previous condition
+	Alternatives      []string // Multiple values grouped by OR on same field
+	IsComputed        bool     // Always false for Sigma (no computed fields)
+	SourceField       string   // Always empty for Sigma
 }
 
 // ParseResult holds the complete extraction result from a Sigma rule.
 type ParseResult struct {
 	Conditions     []Condition       // Extracted conditions
+	Expression     *Expression       // Lossless boolean expression tree for the detection condition
 	GroupByFields  []string          // Fields from aggregation group-by clauses
 	ComputedFields map[string]string // Always empty for Sigma
 	Commands       []string          // Aggregation commands detected (e.g., "count", "sum")
@@ -29,6 +32,27 @@ type ParseResult struct {
 	Status    string     // Rule status: experimental, test, stable, deprecated, unsupported
 	Title     string     // Rule title
 	Tags      []string   // MITRE ATT&CK tags and other tags
+}
+
+// ExpressionKind identifies a node in a Sigma detection expression tree.
+type ExpressionKind string
+
+const (
+	ExpressionCondition ExpressionKind = "condition"
+	ExpressionAnd       ExpressionKind = "and"
+	ExpressionOr        ExpressionKind = "or"
+	ExpressionNot       ExpressionKind = "not"
+	ExpressionThreshold ExpressionKind = "threshold"
+)
+
+// Expression preserves boolean grouping and threshold quantifiers from a
+// Sigma detection condition. Threshold is used for expressions such as
+// "2 of selection_*"; it is ignored for other node kinds.
+type Expression struct {
+	Kind      ExpressionKind
+	Condition *Condition
+	Children  []*Expression
+	Threshold int
 }
 
 // LogSource describes the log source specified in a Sigma rule.
@@ -53,9 +77,9 @@ type JoinInfo struct {
 type FieldProvenance string
 
 const (
-	ProvenanceMain     FieldProvenance = "main"
-	ProvenanceJoined   FieldProvenance = "joined"
-	ProvenanceJoinKey  FieldProvenance = "join_key"
+	ProvenanceMain      FieldProvenance = "main"
+	ProvenanceJoined    FieldProvenance = "joined"
+	ProvenanceJoinKey   FieldProvenance = "join_key"
 	ProvenanceAmbiguous FieldProvenance = "ambiguous"
 )
 

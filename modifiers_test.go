@@ -84,8 +84,8 @@ func TestParseModifiers_Exists(t *testing.T) {
 
 func TestParseModifiers_FieldRef(t *testing.T) {
 	_, result := parseModifiers("SubjectUserName|fieldref", []string{"TargetUserName"})
-	if result.operator != "fieldref" {
-		t.Errorf("expected operator 'fieldref', got %q", result.operator)
+	if result.operator != "=" || !result.fieldReference {
+		t.Errorf("expected equality field reference, got operator=%q fieldReference=%v", result.operator, result.fieldReference)
 	}
 }
 
@@ -116,20 +116,15 @@ func TestParseModifiers_Base64(t *testing.T) {
 
 func TestParseModifiers_Base64Offset(t *testing.T) {
 	_, result := parseModifiers("CommandLine|base64offset", []string{"test"})
-	// Should have original + 3 offset variants
-	if len(result.values) < 4 {
-		t.Errorf("expected at least 4 values for base64offset, got %d: %v", len(result.values), result.values)
+	if len(result.values) != 3 {
+		t.Errorf("expected 3 values for base64offset, got %d: %v", len(result.values), result.values)
 	}
 }
 
 func TestParseModifiers_Wide(t *testing.T) {
 	_, result := parseModifiers("CommandLine|wide", []string{"test"})
-	if len(result.values) < 2 {
-		t.Errorf("expected at least 2 values for wide, got %d", len(result.values))
-	}
-	// Should contain the original value
-	if result.values[0] != "test" {
-		t.Errorf("expected first value 'test', got %q", result.values[0])
+	if len(result.values) != 1 || result.values[0] != "t\x00e\x00s\x00t\x00" {
+		t.Errorf("expected only UTF-16LE value, got %v", result.values)
 	}
 }
 
@@ -186,11 +181,11 @@ func TestParseModifiers_CaseInsensitive(t *testing.T) {
 
 func TestParseModifiers_UTF16LE(t *testing.T) {
 	_, result := parseModifiers("Field|utf16le", []string{"A"})
-	if len(result.values) < 2 {
-		t.Errorf("expected at least 2 values, got %d", len(result.values))
+	if len(result.values) != 1 {
+		t.Fatalf("expected one value, got %d", len(result.values))
 	}
 	// UTF16LE of "A" is 0x41 0x00
-	utf16Val := result.values[1]
+	utf16Val := result.values[0]
 	if len(utf16Val) != 2 || utf16Val[0] != 0x41 || utf16Val[1] != 0x00 {
 		t.Errorf("expected UTF-16LE encoding of 'A', got %v", []byte(utf16Val))
 	}
@@ -198,21 +193,31 @@ func TestParseModifiers_UTF16LE(t *testing.T) {
 
 func TestParseModifiers_UTF16BE(t *testing.T) {
 	_, result := parseModifiers("Field|utf16be", []string{"A"})
-	if len(result.values) < 2 {
-		t.Errorf("expected at least 2 values, got %d", len(result.values))
+	if len(result.values) != 1 {
+		t.Fatalf("expected one value, got %d", len(result.values))
 	}
 	// UTF16BE of "A" is 0x00 0x41
-	utf16Val := result.values[1]
+	utf16Val := result.values[0]
 	if len(utf16Val) != 2 || utf16Val[0] != 0x00 || utf16Val[1] != 0x41 {
 		t.Errorf("expected UTF-16BE encoding of 'A', got %v", []byte(utf16Val))
 	}
 }
 
 func TestParseModifiers_Expand(t *testing.T) {
-	// expand modifier passes through values unchanged
 	_, result := parseModifiers("CommandLine|expand", []string{"%APPDATA%\\test"})
-	if len(result.values) != 1 || result.values[0] != "%APPDATA%\\test" {
-		t.Errorf("expected value pass-through, got %v", result.values)
+	if !result.requiresExpansion || len(result.errors) != 0 {
+		t.Fatalf("expected lossless expansion marker, got %#v", result)
+	}
+}
+
+func TestParseModifiers_RegexCaseSensitivity(t *testing.T) {
+	_, sensitive := parseModifiers("TargetFilename|re", []string{"^test$"})
+	if !sensitive.caseSensitive {
+		t.Fatal("Sigma regex must be case-sensitive unless the i flag is present")
+	}
+	_, insensitive := parseModifiers("TargetFilename|re|i", []string{"^test$"})
+	if insensitive.caseSensitive || len(insensitive.errors) != 0 {
+		t.Fatalf("expected valid case-insensitive regex, got %#v", insensitive)
 	}
 }
 

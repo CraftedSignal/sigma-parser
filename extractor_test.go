@@ -619,7 +619,7 @@ detection:
 	}
 	found := false
 	for _, c := range result.Conditions {
-		if c.Field == "SubjectUserName" && c.Operator == "fieldref" && c.Value == "TargetUserName" {
+		if c.Field == "SubjectUserName" && c.Operator == "=" && c.ValueReference == "TargetUserName" {
 			found = true
 		}
 	}

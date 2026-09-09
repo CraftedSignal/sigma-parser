@@ -60,6 +60,9 @@ func parseConditionExpr(condStr string) (condNode, string, []string) {
 	lexer := newConditionLexer(condStr)
 	p := &conditionParser{tokens: lexer.tokens}
 	node := p.parseOr()
+	if next := p.peek(); next.typ != tokEOF && next.typ != tokPipe {
+		p.errors = append(p.errors, fmt.Sprintf("unexpected token after condition expression: %q", next.val))
+	}
 
 	// Check for aggregation after pipe
 	var aggExpr string

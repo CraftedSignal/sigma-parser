@@ -91,6 +91,8 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 
 	ast, aggExpr, parseErrs := parseConditionExpr(condStr)
 	result.Errors = append(result.Errors, parseErrs...)
+	result.Expression = buildExpression(ast, items)
+	result.Errors = append(result.Errors, validateExpression(result.Expression)...)
 
 	// Phase 4: Evaluate AST → conditions
 	conditions := evaluateAST(ast, items, false)

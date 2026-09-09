@@ -108,6 +108,12 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 	}
 
 	field, modResult := parseModifiers(fieldWithMods, values)
+	if len(modResult.errors) > 0 {
+		return nil, modResult.errors
+	}
+	if modResult.fieldReference && len(modResult.values) != 1 {
+		return nil, []string{"fieldref modifier requires exactly one field name"}
+	}
 
 	// exists modifier: value is the modifier result
 	if modResult.operator == "exists" {
@@ -128,10 +134,14 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 	// Single value
 	if len(modResult.values) == 1 {
 		cond := Condition{
-			Field:         field,
-			Operator:      modResult.operator,
-			Value:         modResult.values[0],
-			CaseSensitive: modResult.caseSensitive,
+			Field:             field,
+			Operator:          modResult.operator,
+			Value:             modResult.values[0],
+			CaseSensitive:     modResult.caseSensitive,
+			RequiresExpansion: modResult.requiresExpansion,
+		}
+		if modResult.fieldReference {
+			cond.ValueReference = modResult.values[0]
 		}
 		// Bare wildcard → exists
 		if cond.Value == "*" && cond.Operator == "=" {
@@ -146,10 +156,14 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 		conds := make([]Condition, len(modResult.values))
 		for i, v := range modResult.values {
 			conds[i] = Condition{
-				Field:         field,
-				Operator:      modResult.operator,
-				Value:         v,
-				CaseSensitive: modResult.caseSensitive,
+				Field:             field,
+				Operator:          modResult.operator,
+				Value:             v,
+				CaseSensitive:     modResult.caseSensitive,
+				RequiresExpansion: modResult.requiresExpansion,
+			}
+			if modResult.fieldReference {
+				conds[i].ValueReference = v
 			}
 			if i > 0 {
 				conds[i].LogicalOp = "AND"
@@ -160,11 +174,15 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 
 	// OR: group into single condition with alternatives
 	cond := Condition{
-		Field:         field,
-		Operator:      modResult.operator,
-		Value:         modResult.values[0],
-		Alternatives:  modResult.values,
-		CaseSensitive: modResult.caseSensitive,
+		Field:             field,
+		Operator:          modResult.operator,
+		Value:             modResult.values[0],
+		Alternatives:      modResult.values,
+		CaseSensitive:     modResult.caseSensitive,
+		RequiresExpansion: modResult.requiresExpansion,
+	}
+	if modResult.fieldReference {
+		cond.ValueReference = modResult.values[0]
 	}
 	return []Condition{cond}, nil
 }

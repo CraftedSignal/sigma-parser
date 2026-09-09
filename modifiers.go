@@ -1,17 +1,22 @@
 package sigma
 
 import (
+	"bytes"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"unicode/utf16"
 )
 
 // modifierResult holds the parsed result of applying a modifier chain.
 type modifierResult struct {
-	operator      string   // Canonical operator for the condition
-	allOf         bool     // True if list values should be AND'd (not OR'd)
-	caseSensitive bool     // True if |cased modifier is present
-	values        []string // Transformed/expanded values
+	operator          string   // Canonical operator for the condition
+	allOf             bool     // True if list values should be AND'd (not OR'd)
+	caseSensitive     bool     // True if matching must be case-sensitive
+	fieldReference    bool     // True if values name other fields
+	requiresExpansion bool     // True if placeholders need pipeline expansion
+	values            []string // Transformed/expanded values
+	errors            []string
 }
 
 // parseModifiers parses a field name with modifiers (e.g. "FieldName|contains|all")
@@ -24,8 +29,8 @@ func parseModifiers(fieldWithMods string, values []string) (field string, result
 	result.operator = "="
 	result.values = values
 
-	for _, mod := range modifiers {
-		switch strings.ToLower(mod) {
+	for _, modifier := range modifiers {
+		switch strings.ToLower(modifier) {
 		case "contains":
 			result.operator = "contains"
 		case "startswith":
@@ -34,6 +39,7 @@ func parseModifiers(fieldWithMods string, values []string) (field string, result
 			result.operator = "endswith"
 		case "re":
 			result.operator = "matches"
+			result.caseSensitive = true
 		case "cidr":
 			result.operator = "cidrmatch"
 		case "gt":
@@ -47,15 +53,17 @@ func parseModifiers(fieldWithMods string, values []string) (field string, result
 		case "exists":
 			result.operator = "exists"
 		case "fieldref":
-			result.operator = "fieldref"
+			result.fieldReference = true
 		case "all":
 			result.allOf = true
 		case "base64":
 			result.values = applyBase64(result.values)
 		case "base64offset":
 			result.values = applyBase64Offset(result.values)
-		case "wide", "utf16", "utf16le":
+		case "wide", "utf16le":
 			result.values = applyUTF16LE(result.values)
+		case "utf16":
+			result.values = applyUTF16(result.values)
 		case "utf16be":
 			result.values = applyUTF16BE(result.values)
 		case "windash":
@@ -63,112 +71,108 @@ func parseModifiers(fieldWithMods string, values []string) (field string, result
 		case "cased":
 			result.caseSensitive = true
 		case "expand":
-			// Placeholder expansion — values pass through as-is.
-			// Real expansion requires environment variable context.
+			result.requiresExpansion = true
+		case "i":
+			if result.operator != "matches" {
+				result.errors = append(result.errors, "regex flag modifier i requires re")
+			} else {
+				result.caseSensitive = false
+			}
+		case "m", "s":
+			result.errors = append(result.errors, fmt.Sprintf("regex flag modifier %s is not supported", modifier))
+		default:
+			result.errors = append(result.errors, fmt.Sprintf("unsupported modifier %q", modifier))
 		}
 	}
 
 	return field, result
 }
 
-// applyBase64 encodes each value as base64 and returns both original and encoded.
+// applyBase64 encodes each value as base64.
 func applyBase64(values []string) []string {
-	out := make([]string, 0, len(values)*2)
-	for _, v := range values {
-		out = append(out, v)
-		out = append(out, base64.StdEncoding.EncodeToString([]byte(v)))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, base64.StdEncoding.EncodeToString([]byte(value)))
 	}
 	return out
 }
 
-// applyBase64Offset generates 3 offset variants per value.
-// When a string is base64-encoded at different byte boundaries, the encoded
-// output differs. This produces all 3 possible alignment variants.
+// applyBase64Offset generates the three alignment variants defined by Sigma.
 func applyBase64Offset(values []string) []string {
-	out := make([]string, 0, len(values)*4)
-	for _, v := range values {
-		out = append(out, v)
-		b := []byte(v)
-		// Offset 0: encode as-is, trim padding
-		out = append(out, trimBase64Padding(base64.StdEncoding.EncodeToString(b)))
-		// Offset 1: prepend 1 byte
-		padded1 := append([]byte{0}, b...)
-		enc1 := base64.StdEncoding.EncodeToString(padded1)
-		if len(enc1) > 1 {
-			out = append(out, trimBase64Padding(enc1[1:]))
-		}
-		// Offset 2: prepend 2 bytes
-		padded2 := append([]byte{0, 0}, b...)
-		enc2 := base64.StdEncoding.EncodeToString(padded2)
-		if len(enc2) > 2 {
-			out = append(out, trimBase64Padding(enc2[2:]))
+	out := make([]string, 0, len(values)*3)
+	startOffsets := []int{0, 2, 3}
+	for _, value := range values {
+		for offset, start := range startOffsets {
+			input := append(bytes.Repeat([]byte{' '}, offset), []byte(value)...)
+			encoded := base64.StdEncoding.EncodeToString(input)
+			end := len(encoded)
+			switch (len(value) + offset) % 3 {
+			case 1:
+				end -= 3
+			case 2:
+				end -= 2
+			}
+			if start < end {
+				out = append(out, encoded[start:end])
+			}
 		}
 	}
 	return out
 }
 
-func trimBase64Padding(s string) string {
-	return strings.TrimRight(s, "=")
-}
-
-// applyUTF16LE encodes values as UTF-16LE hex-escaped strings.
 func applyUTF16LE(values []string) []string {
-	out := make([]string, 0, len(values)*2)
-	for _, v := range values {
-		out = append(out, v)
-		encoded := encodeUTF16LE(v)
-		if encoded != v {
-			out = append(out, encoded)
-		}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, encodeUTF16LE(value))
 	}
 	return out
 }
 
-// applyUTF16BE encodes values as UTF-16BE strings.
+func applyUTF16(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, "\xff\xfe"+encodeUTF16LE(value))
+	}
+	return out
+}
+
 func applyUTF16BE(values []string) []string {
-	out := make([]string, 0, len(values)*2)
-	for _, v := range values {
-		out = append(out, v)
-		encoded := encodeUTF16BE(v)
-		if encoded != v {
-			out = append(out, encoded)
-		}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, encodeUTF16BE(value))
 	}
 	return out
 }
 
-func encodeUTF16LE(s string) string {
-	runes := []rune(s)
-	u16 := utf16.Encode(runes)
-	var buf strings.Builder
-	for _, code := range u16 {
-		buf.WriteByte(byte(code & 0xFF))
-		buf.WriteByte(byte(code >> 8))
+func encodeUTF16LE(value string) string {
+	encoded := utf16.Encode([]rune(value))
+	var result strings.Builder
+	for _, code := range encoded {
+		result.WriteByte(byte(code & 0xff))
+		result.WriteByte(byte(code >> 8))
 	}
-	return buf.String()
+	return result.String()
 }
 
-func encodeUTF16BE(s string) string {
-	runes := []rune(s)
-	u16 := utf16.Encode(runes)
-	var buf strings.Builder
-	for _, code := range u16 {
-		buf.WriteByte(byte(code >> 8))
-		buf.WriteByte(byte(code & 0xFF))
+func encodeUTF16BE(value string) string {
+	encoded := utf16.Encode([]rune(value))
+	var result strings.Builder
+	for _, code := range encoded {
+		result.WriteByte(byte(code >> 8))
+		result.WriteByte(byte(code & 0xff))
 	}
-	return buf.String()
+	return result.String()
 }
 
 // applyWindash generates dash/slash variants for command-line arguments.
-// For values starting with - it also adds / variant, and vice versa.
 func applyWindash(values []string) []string {
 	out := make([]string, 0, len(values)*2)
-	for _, v := range values {
-		out = append(out, v)
-		if strings.HasPrefix(v, "-") {
-			out = append(out, "/"+v[1:])
-		} else if strings.HasPrefix(v, "/") {
-			out = append(out, "-"+v[1:])
+	for _, value := range values {
+		out = append(out, value)
+		if strings.HasPrefix(value, "-") {
+			out = append(out, "/"+value[1:])
+		} else if strings.HasPrefix(value, "/") {
+			out = append(out, "-"+value[1:])
 		}
 	}
 	return out

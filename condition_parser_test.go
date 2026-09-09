@@ -218,3 +218,10 @@ func TestConditionParser_AllOfStar(t *testing.T) {
 		t.Errorf("expected 'all of *', got %q of %q", q.quantifier, q.pattern)
 	}
 }
+
+func TestParseConditionExprRejectsTrailingTokens(t *testing.T) {
+	_, _, errors := parseConditionExpr("selection_img 2 selection_keywords")
+	if len(errors) == 0 {
+		t.Fatal("expected trailing tokens to be rejected")
+	}
+}

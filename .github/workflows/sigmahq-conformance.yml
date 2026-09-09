@@ -1,0 +1,31 @@
+name: SigmaHQ conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parser-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: SigmaHQ/sigma
+          path: .upstream/sigma
+          fetch-depth: 1
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run parser and SigmaHQ conformance tests
+        env:
+          SIGMAHQ_CORPUS_PATH: ${{ github.workspace }}/.upstream/sigma
+        run: go test ./... -count=1
