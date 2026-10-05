@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+var (
+	maxParseTime = 5 * time.Second
+	extractHook  func(string)
+)
+
 // ExtractConditions parses a Sigma YAML rule and returns structured conditions.
 // This is the main entry point, matching the API of spl-parser and leql-parser.
 // Includes 5-second timeout and panic recovery.
@@ -30,14 +35,17 @@ func ExtractConditions(yamlContent string) *ParseResult {
 				}
 			}
 		}()
+		if extractHook != nil {
+			extractHook(yamlContent)
+		}
 		done <- extractResult{result: extractConditionsInternal(yamlContent)}
 	}()
 
 	select {
 	case res := <-done:
 		return res.result
-	case <-time.After(5 * time.Second):
-		result.Errors = append(result.Errors, "parsing timed out after 5 seconds")
+	case <-time.After(maxParseTime):
+		result.Errors = append(result.Errors, fmt.Sprintf("parsing timed out after %s", maxParseTime))
 		return result
 	}
 }
@@ -73,24 +81,12 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 	result.Errors = append(result.Errors, errs...)
 
 	// Phase 3: Parse condition expression
-	condStr := ""
-	switch v := rule.Detection["condition"].(type) {
-	case string:
-		condStr = v
-	case []any:
-		// Multiple conditions — use first one
-		if len(v) > 0 {
-			condStr = fmt.Sprintf("%v", v[0])
-		}
-	}
-
-	if condStr == "" {
+	ast, aggExprs, multipleConditions, conditionErrs := parseDetectionCondition(rule.Detection["condition"])
+	result.Errors = append(result.Errors, conditionErrs...)
+	if ast == nil {
 		result.Errors = append(result.Errors, "empty condition expression")
 		return result
 	}
-
-	ast, aggExpr, parseErrs := parseConditionExpr(condStr)
-	result.Errors = append(result.Errors, parseErrs...)
 	result.Expression = buildExpression(ast, items)
 	result.Errors = append(result.Errors, validateExpression(result.Expression)...)
 
@@ -102,14 +98,20 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 	if tf, ok := rule.Detection["timeframe"]; ok {
 		timeframe = fmt.Sprintf("%v", tf)
 	}
-	agg, aggErrs := parseAggregation(aggExpr, timeframe)
-	result.Errors = append(result.Errors, aggErrs...)
-
-	if agg != nil {
+	result.Timeframe = timeframe
+	if multipleConditions && len(aggExprs) > 0 {
+		result.Errors = append(result.Errors, "multiple condition strings with aggregation cannot be represented losslessly")
+	}
+	for _, aggExpr := range aggExprs {
+		agg, aggErrs := parseAggregation(aggExpr, timeframe)
+		result.Errors = append(result.Errors, aggErrs...)
+		if agg == nil {
+			continue
+		}
 		aggConds, groupBy, commands := agg.toConditions()
 		conditions = append(conditions, aggConds...)
-		result.GroupByFields = groupBy
-		result.Commands = commands
+		result.GroupByFields = append(result.GroupByFields, groupBy...)
+		result.Commands = append(result.Commands, commands...)
 	}
 
 	// Phase 5: Post-process
@@ -118,4 +120,41 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 
 	result.Conditions = conditions
 	return result
+}
+
+func parseDetectionCondition(raw any) (condNode, []string, bool, []string) {
+	switch v := raw.(type) {
+	case string:
+		node, aggExpr, errs := parseConditionExpr(v)
+		return node, nonEmptyAggExprs(aggExpr), false, errs
+	case []any:
+		children := make([]condNode, 0, len(v))
+		var aggExprs []string
+		var errors []string
+		for _, item := range v {
+			node, aggExpr, errs := parseConditionExpr(fmt.Sprintf("%v", item))
+			errors = append(errors, errs...)
+			if node != nil {
+				children = append(children, node)
+			}
+			aggExprs = append(aggExprs, nonEmptyAggExprs(aggExpr)...)
+		}
+		switch len(children) {
+		case 0:
+			return nil, aggExprs, len(v) > 1, errors
+		case 1:
+			return children[0], aggExprs, len(v) > 1, errors
+		default:
+			return condNodeOr{children: children}, aggExprs, true, errors
+		}
+	default:
+		return nil, nil, false, []string{fmt.Sprintf("unsupported condition expression type %T", raw)}
+	}
+}
+
+func nonEmptyAggExprs(expr string) []string {
+	if expr == "" {
+		return nil
+	}
+	return []string{expr}
 }

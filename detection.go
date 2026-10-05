@@ -83,9 +83,6 @@ func resolveFieldMap(m map[string]any) ([]Condition, []string) {
 				// LogicalOp is set in resolveFieldValue
 			}
 		}
-		if len(conds) > 0 && len(conditions) > 0 && conds[0].LogicalOp == "" {
-			conds[0].LogicalOp = "AND"
-		}
 		conditions = append(conditions, conds...)
 		errors = append(errors, errs...)
 	}
@@ -162,9 +159,6 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 				CaseSensitive:     modResult.caseSensitive,
 				RequiresExpansion: modResult.requiresExpansion,
 			}
-			if modResult.fieldReference {
-				conds[i].ValueReference = v
-			}
 			if i > 0 {
 				conds[i].LogicalOp = "AND"
 			}
@@ -180,9 +174,6 @@ func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []strin
 		Alternatives:      modResult.values,
 		CaseSensitive:     modResult.caseSensitive,
 		RequiresExpansion: modResult.requiresExpansion,
-	}
-	if modResult.fieldReference {
-		cond.ValueReference = modResult.values[0]
 	}
 	return []Condition{cond}, nil
 }

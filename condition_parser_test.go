@@ -225,3 +225,136 @@ func TestParseConditionExprRejectsTrailingTokens(t *testing.T) {
 		t.Fatal("expected trailing tokens to be rejected")
 	}
 }
+
+func TestEvaluateAST_NotOrAppliesDeMorgan(t *testing.T) {
+	node, _, errs := parseConditionExpr("not (selection_1 or selection_2)")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	conditions := evaluateAST(node, testDetectionItems(), false)
+	if len(conditions) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conditions))
+	}
+	for i, condition := range conditions {
+		if !condition.Negated {
+			t.Fatalf("condition %d should be negated: %+v", i, condition)
+		}
+	}
+	if conditions[1].LogicalOp != "AND" {
+		t.Fatalf("expected De Morgan connector AND, got %q", conditions[1].LogicalOp)
+	}
+}
+
+func TestEvaluateAST_NotAndAppliesDeMorgan(t *testing.T) {
+	node, _, errs := parseConditionExpr("not (selection_1 and selection_2)")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	conditions := evaluateAST(node, testDetectionItems(), false)
+	if len(conditions) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conditions))
+	}
+	for i, condition := range conditions {
+		if !condition.Negated {
+			t.Fatalf("condition %d should be negated: %+v", i, condition)
+		}
+	}
+	if conditions[1].LogicalOp != "OR" {
+		t.Fatalf("expected De Morgan connector OR, got %q", conditions[1].LogicalOp)
+	}
+}
+
+func TestEvaluateQuantifier_NotAllOfThemAppliesDeMorgan(t *testing.T) {
+	node, _, errs := parseConditionExpr("not all of them")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	conditions := evaluateAST(node, testDetectionItems(), false)
+	if len(conditions) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conditions))
+	}
+	for i, condition := range conditions {
+		if !condition.Negated {
+			t.Fatalf("condition %d should be negated: %+v", i, condition)
+		}
+	}
+	if conditions[1].LogicalOp != "OR" {
+		t.Fatalf("expected De Morgan connector OR, got %q", conditions[1].LogicalOp)
+	}
+}
+
+func TestEvaluateQuantifier_NotOneOfThemAppliesDeMorgan(t *testing.T) {
+	node, _, errs := parseConditionExpr("not 1 of them")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	conditions := evaluateAST(node, testDetectionItems(), false)
+	if len(conditions) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conditions))
+	}
+	for i, condition := range conditions {
+		if !condition.Negated {
+			t.Fatalf("condition %d should be negated: %+v", i, condition)
+		}
+	}
+	if conditions[1].LogicalOp != "AND" {
+		t.Fatalf("expected De Morgan connector AND, got %q", conditions[1].LogicalOp)
+	}
+}
+
+func TestEvaluateQuantifier_NotAllOfSelectionPatternAppliesDeMorgan(t *testing.T) {
+	node, _, errs := parseConditionExpr("not all of selection_*")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	conditions := evaluateAST(node, testDetectionItems(), false)
+	if len(conditions) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conditions))
+	}
+	for i, condition := range conditions {
+		if !condition.Negated {
+			t.Fatalf("condition %d should be negated: %+v", i, condition)
+		}
+	}
+	if conditions[1].LogicalOp != "OR" {
+		t.Fatalf("expected De Morgan connector OR, got %q", conditions[1].LogicalOp)
+	}
+}
+
+func TestEvaluateQuantifier_NotOneOfSelectionPatternAppliesDeMorgan(t *testing.T) {
+	node, _, errs := parseConditionExpr("not 1 of selection_*")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	conditions := evaluateAST(node, testDetectionItems(), false)
+	if len(conditions) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conditions))
+	}
+	for i, condition := range conditions {
+		if !condition.Negated {
+			t.Fatalf("condition %d should be negated: %+v", i, condition)
+		}
+	}
+	if conditions[1].LogicalOp != "AND" {
+		t.Fatalf("expected De Morgan connector AND, got %q", conditions[1].LogicalOp)
+	}
+}
+
+func testDetectionItems() map[string]*detectionItem {
+	return map[string]*detectionItem{
+		"selection_1": {
+			name:       "selection_1",
+			conditions: []Condition{{Field: "Image", Operator: "contains", Value: "cmd.exe"}},
+		},
+		"selection_2": {
+			name:       "selection_2",
+			conditions: []Condition{{Field: "CommandLine", Operator: "contains", Value: "whoami"}},
+		},
+	}
+}

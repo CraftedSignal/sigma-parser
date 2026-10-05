@@ -7,7 +7,7 @@ import (
 
 // aggregation holds parsed aggregation data from a Sigma condition pipe expression.
 type aggregation struct {
-	function   string   // "count", "sum", "min", "max", "avg"
+	function   string   // "count", "sum", "min", "max", "avg", "distinct_count"
 	field      string   // Field being aggregated (empty for count without args)
 	groupBy    []string // Group-by fields
 	comparison string   // ">", ">=", "<", "<=", "="
@@ -38,7 +38,7 @@ func parseAggregation(expr string, timeframe string) (*aggregation, []string) {
 	return parseFunctionAggregation(expr)
 }
 
-// parseFunctionAggregation parses count/sum/min/max/avg aggregations.
+// parseFunctionAggregation parses count/sum/min/max/avg/distinct_count aggregations.
 func parseFunctionAggregation(expr string) (*aggregation, []string) {
 	var errors []string
 	agg := &aggregation{}
@@ -49,9 +49,6 @@ func parseFunctionAggregation(expr string) (*aggregation, []string) {
 	pos := 0
 
 	peek := func() token {
-		if pos >= len(tokens) {
-			return token{typ: tokEOF}
-		}
 		return tokens[pos]
 	}
 	advance := func() token {
@@ -73,6 +70,8 @@ func parseFunctionAggregation(expr string) (*aggregation, []string) {
 	switch funcName {
 	case "count", "sum", "min", "max", "avg":
 		agg.function = funcName
+	case "dc", "distinct_count":
+		agg.function = "distinct_count"
 	default:
 		errors = append(errors, "unknown aggregation function: "+t.val)
 		return nil, errors

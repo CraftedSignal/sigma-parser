@@ -32,6 +32,7 @@ type ParseResult struct {
 	Status    string     // Rule status: experimental, test, stable, deprecated, unsupported
 	Title     string     // Rule title
 	Tags      []string   // MITRE ATT&CK tags and other tags
+	Timeframe string     // Detection timeframe, e.g. "5m"
 }
 
 // ExpressionKind identifies a node in a Sigma detection expression tree.

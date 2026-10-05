@@ -236,10 +236,14 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) [
 
 	case condNodeAnd:
 		var result []Condition
+		logicalOp := "AND"
+		if negated {
+			logicalOp = "OR"
+		}
 		for i, child := range n.children {
 			childConds := evaluateAST(child, items, negated)
 			if i > 0 && len(childConds) > 0 {
-				childConds[0].LogicalOp = "AND"
+				childConds[0].LogicalOp = logicalOp
 			}
 			result = append(result, childConds...)
 		}
@@ -247,10 +251,14 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) [
 
 	case condNodeOr:
 		var result []Condition
+		logicalOp := "OR"
+		if negated {
+			logicalOp = "AND"
+		}
 		for i, child := range n.children {
 			childConds := evaluateAST(child, items, negated)
 			if i > 0 && len(childConds) > 0 {
-				childConds[0].LogicalOp = "OR"
+				childConds[0].LogicalOp = logicalOp
 			}
 			result = append(result, childConds...)
 		}
@@ -290,9 +298,10 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 			}
 		}
 
-		// Connect items: "all of" → AND, "1 of" / "N of" → OR
+		// Connect items: "all of" → AND, "1 of" / "N of" → OR.
+		// Under NOT, apply De Morgan for the compatibility Conditions slice.
 		if i > 0 && len(conds) > 0 {
-			if isAll {
+			if isAll != negated {
 				conds[0].LogicalOp = "AND"
 			} else {
 				conds[0].LogicalOp = "OR"

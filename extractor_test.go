@@ -588,16 +588,67 @@ level: medium
 logsource:
     category: test
 detection:
-    selection:
-        field: value
+    selection_process:
+        Image|endswith: '\cmd.exe'
+    filter_process:
+        ParentImage|endswith: '\explorer.exe'
+    selection_network:
+        DestinationHostname|contains: evil.example
     condition:
-        - selection
-        - 1 of them
+        - selection_process and not filter_process
+        - selection_network
 `
 	result := ExtractConditions(yaml)
-	// Should use first condition
-	if len(result.Conditions) == 0 {
-		t.Error("expected conditions from first condition string")
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	if result.Expression == nil || result.Expression.Kind != ExpressionOr || len(result.Expression.Children) != 2 {
+		t.Fatalf("expected multiple condition strings to be OR-linked, got %#v", result.Expression)
+	}
+
+	var foundProcess, foundNegatedFilter, foundNetwork bool
+	for _, c := range result.Conditions {
+		switch {
+		case c.Field == "Image" && c.Operator == "endswith" && c.Value == `\cmd.exe` && !c.Negated:
+			foundProcess = true
+		case c.Field == "ParentImage" && c.Operator == "endswith" && c.Value == `\explorer.exe` && c.Negated:
+			foundNegatedFilter = true
+		case c.Field == "DestinationHostname" && c.Operator == "contains" && c.Value == "evil.example" && c.LogicalOp == "OR":
+			foundNetwork = true
+		}
+	}
+	if !foundProcess || !foundNegatedFilter || !foundNetwork {
+		t.Fatalf("expected both condition entries preserved with OR and negation, got %+v", result.Conditions)
+	}
+}
+
+func TestExtractConditions_MultipleConditionStringsWithAggregationDiagnosesLoss(t *testing.T) {
+	yaml := `
+title: Multi Condition Aggregation
+status: test
+level: medium
+logsource:
+    category: test
+detection:
+    selection_process:
+        Image|endswith: '\cmd.exe'
+    selection_network:
+        DestinationHostname|contains: evil.example
+    timeframe: 5m
+    condition:
+        - selection_process | count() by User > 5
+        - selection_network
+`
+	result := ExtractConditions(yaml)
+	found := false
+	for _, err := range result.Errors {
+		if strings.Contains(err, "multiple condition strings with aggregation cannot be represented losslessly") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected lossless aggregation diagnostic, got errors %v", result.Errors)
 	}
 }
 
@@ -626,6 +677,30 @@ detection:
 	if !found {
 		t.Error("expected fieldref condition")
 	}
+}
+
+func TestExtractConditions_FieldRefComparisonModifier(t *testing.T) {
+	yaml := `
+title: Field Reference Comparison
+status: test
+level: medium
+logsource:
+  product: windows
+detection:
+  selection:
+    ProcessId|gt|fieldref: ParentProcessId
+  condition: selection
+`
+	result := ExtractConditions(yaml)
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	for _, c := range result.Conditions {
+		if c.Field == "ProcessId" && c.Operator == ">" && c.ValueReference == "ParentProcessId" {
+			return
+		}
+	}
+	t.Fatalf("expected comparison fieldref condition, got %#v", result.Conditions)
 }
 
 func TestExtractConditions_ExistsModifier(t *testing.T) {
@@ -775,5 +850,24 @@ level: medium
 	}
 	if normalCond.CaseSensitive {
 		t.Error("expected CaseSensitive=false for |contains without |cased")
+	}
+}
+
+func TestExtractConditions_Timeframe(t *testing.T) {
+	yaml := `
+title: Time Window
+detection:
+  selection:
+    EventID: 4625
+  timeframe: 5m
+  condition: selection
+`
+
+	result := ExtractConditions(yaml)
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	if result.Timeframe != "5m" {
+		t.Fatalf("expected timeframe 5m, got %q", result.Timeframe)
 	}
 }

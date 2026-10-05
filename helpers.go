@@ -17,6 +17,9 @@ func deduplicateStrings(ss []string) []string {
 
 // IsStatisticalQuery returns true if the Sigma rule contains aggregation functions.
 func IsStatisticalQuery(result *ParseResult) bool {
+	if result == nil {
+		return false
+	}
 	for _, cmd := range result.Commands {
 		switch strings.ToLower(cmd) {
 		case "count", "sum", "min", "max", "avg", "near":
@@ -33,6 +36,9 @@ func HasUnmappedComputedFields(_ *ParseResult) bool {
 
 // HasComplexWhereConditions checks if any conditions use complex operators.
 func HasComplexWhereConditions(result *ParseResult) bool {
+	if result == nil {
+		return false
+	}
 	for _, c := range result.Conditions {
 		switch c.Operator {
 		case "matches", "cidrmatch":

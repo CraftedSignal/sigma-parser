@@ -63,7 +63,7 @@ func TestAggregation_MultipleGroupBy(t *testing.T) {
 }
 
 func TestAggregation_AllFunctions(t *testing.T) {
-	funcs := []string{"count", "sum", "min", "max", "avg"}
+	funcs := []string{"count", "sum", "min", "max", "avg", "distinct_count"}
 	for _, fn := range funcs {
 		agg, errs := parseAggregation(fn+"(field) > 0", "")
 		if len(errs) > 0 {
@@ -73,6 +73,33 @@ func TestAggregation_AllFunctions(t *testing.T) {
 		if agg.function != fn {
 			t.Errorf("expected function %q, got %q", fn, agg.function)
 		}
+	}
+}
+
+func TestAggregation_DistinctCountAlias(t *testing.T) {
+	agg, errs := parseAggregation("dc(User) by SourceIp >= 5", "")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if agg.function != "distinct_count" || agg.field != "User" {
+		t.Fatalf("expected distinct_count(User), got %s(%s)", agg.function, agg.field)
+	}
+	if len(agg.groupBy) != 1 || agg.groupBy[0] != "SourceIp" {
+		t.Fatalf("expected groupBy [SourceIp], got %v", agg.groupBy)
+	}
+
+	conds, groupBy, commands := agg.toConditions()
+	if len(commands) != 1 || commands[0] != "distinct_count" {
+		t.Fatalf("expected commands [distinct_count], got %v", commands)
+	}
+	if len(groupBy) != 1 || groupBy[0] != "SourceIp" {
+		t.Fatalf("expected groupBy [SourceIp], got %v", groupBy)
+	}
+	if len(conds) != 1 {
+		t.Fatalf("expected one aggregation condition, got %d", len(conds))
+	}
+	if conds[0].Field != "distinct_count(User)" || conds[0].Operator != ">=" || conds[0].Value != "5" {
+		t.Fatalf("unexpected aggregation condition: %+v", conds[0])
 	}
 }
 

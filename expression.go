@@ -78,9 +78,6 @@ func expressionFromConditions(conditions []Condition) *Expression {
 	orChildren := make([]*Expression, 0, 2)
 	andChildren := make([]*Expression, 0, len(conditions))
 	flushAnd := func() {
-		if len(andChildren) == 0 {
-			return
-		}
 		orChildren = append(orChildren, compactExpression(ExpressionAnd, andChildren))
 		andChildren = nil
 	}
