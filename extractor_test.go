@@ -871,3 +871,49 @@ detection:
 		t.Fatalf("expected timeframe 5m, got %q", result.Timeframe)
 	}
 }
+
+// LLM-written rules nest mappings where Sigma only allows scalars or scalar
+// lists. These must be rejected, not stringified into "map[...]" values.
+func TestExtractConditions_RejectsNestedValues(t *testing.T) {
+	for name, detection := range map[string]string{
+		"mapping value": `
+    selection:
+        operationName: wipe ManagedDevice
+    aggregation:
+        count:
+            condition: count >= 5
+    condition: selection and aggregation`,
+		"mapping inside list item": `
+    selection:
+        Protocol: tcp
+    burst:
+        - count: 10
+          selection:
+              DestinationPort: "80"
+    condition: selection and burst`,
+		"mapping in keyword list": `
+    keywords:
+        - mimikatz
+        - sekurlsa: logonpasswords
+    condition: keywords`,
+		"list in value list": `
+    selection:
+        CommandLine:
+            - [whoami, hostname]
+    condition: selection`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := ExtractConditions("title: Nested\nlogsource:\n    product: windows\ndetection:" + detection + "\n")
+			if len(result.Errors) == 0 {
+				t.Fatalf("expected nested value to be rejected, conditions=%+v", result.Conditions)
+			}
+			for _, condition := range result.Conditions {
+				for _, value := range append([]string{condition.Value}, condition.Alternatives...) {
+					if strings.HasPrefix(value, "map[") || strings.HasPrefix(value, "[") {
+						t.Fatalf("nested value leaked as %q", value)
+					}
+				}
+			}
+		})
+	}
+}

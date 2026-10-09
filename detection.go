@@ -92,6 +92,10 @@ func resolveFieldMap(m map[string]any) ([]Condition, []string) {
 
 // resolveFieldValue resolves a single field:value pair, applying modifiers.
 func resolveFieldValue(fieldWithMods string, rawValue any) ([]Condition, []string) {
+	if isNestedValue(rawValue) {
+		field, _ := parseModifiers(fieldWithMods, nil)
+		return nil, []string{fmt.Sprintf("field %q: nested mapping or list is not a valid Sigma value", field)}
+	}
 	values, isNull := coerceToStringSlice(rawValue)
 
 	// Handle null — maps to exists:false
@@ -218,6 +222,9 @@ func resolveListOfMaps(list []any) ([]Condition, bool, []string) {
 
 // resolveKeywordList handles a list of keyword strings.
 func resolveKeywordList(list []any) ([]Condition, bool, []string) {
+	if isNestedValue(list) {
+		return nil, true, []string{"keyword list contains a nested mapping or list"}
+	}
 	values := make([]string, 0, len(list))
 	for _, item := range list {
 		values = append(values, fmt.Sprintf("%v", item))
@@ -234,6 +241,23 @@ func resolveKeywordList(list []any) ([]Condition, bool, []string) {
 		Alternatives: values,
 	}
 	return []Condition{cond}, true, nil
+}
+
+// isNestedValue reports a mapping, or a list holding mappings or lists. Sigma
+// values are scalars or flat scalar lists, so these cannot be matched.
+func isNestedValue(raw any) bool {
+	switch value := raw.(type) {
+	case map[string]any, map[any]any:
+		return true
+	case []any:
+		for _, item := range value {
+			switch item.(type) {
+			case map[string]any, map[any]any, []any:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // coerceToStringSlice converts any YAML value to a string slice.
