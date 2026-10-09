@@ -113,6 +113,7 @@ fmt.Println(result.Commands)      // [count]
 | LogSource metadata | Supported |
 | Tags (MITRE ATT&CK) | Supported |
 | Multiple condition strings | Supported |
+| Rule collections (action global/reset/repeat) | Supported; `ExtractRules` returns each rule |
 
 ## API Reference
 

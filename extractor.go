@@ -12,55 +12,72 @@ var (
 
 // ExtractConditions parses a Sigma YAML rule and returns structured conditions.
 // This is the main entry point, matching the API of spl-parser and leql-parser.
+// A rule collection is extracted as the OR of its rules (see ExtractRules).
 // Includes 5-second timeout and panic recovery.
 func ExtractConditions(yamlContent string) *ParseResult {
-	result := &ParseResult{
-		ComputedFields: make(map[string]string),
+	results := guardedExtract(yamlContent, func() []*ParseResult {
+		return []*ParseResult{extractConditionsInternal(yamlContent)}
+	})
+	return results[0]
+}
+
+// ExtractRules parses a Sigma YAML file into one result per rule: one for a
+// plain rule, one per rule of a Sigma 1.0 rule collection, each with its own
+// log source. A collection matches when any of its rules matches.
+func ExtractRules(yamlContent string) []*ParseResult {
+	return guardedExtract(yamlContent, func() []*ParseResult {
+		rules, err := parseSigmaRules(yamlContent)
+		if err != nil {
+			return []*ParseResult{{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}}
+		}
+		results := make([]*ParseResult, len(rules))
+		for i, rule := range rules {
+			results[i] = extractRule(rule)
+		}
+		return results
+	})
+}
+
+// guardedExtract runs an extraction with the parse timeout and panic
+// recovery, reporting either as a single errored result.
+func guardedExtract(yamlContent string, extract func() []*ParseResult) []*ParseResult {
+	failed := func(message string) []*ParseResult {
+		return []*ParseResult{{ComputedFields: make(map[string]string), Errors: []string{message}}}
 	}
-
-	type extractResult struct {
-		result *ParseResult
-	}
-
-	done := make(chan extractResult, 1)
-
+	done := make(chan []*ParseResult, 1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				done <- extractResult{
-					result: &ParseResult{
-						ComputedFields: make(map[string]string),
-						Errors:         []string{fmt.Sprintf("panic during parsing: %v", r)},
-					},
-				}
+				done <- failed(fmt.Sprintf("panic during parsing: %v", r))
 			}
 		}()
 		if extractHook != nil {
 			extractHook(yamlContent)
 		}
-		done <- extractResult{result: extractConditionsInternal(yamlContent)}
+		done <- extract()
 	}()
 
 	select {
-	case res := <-done:
-		return res.result
+	case results := <-done:
+		return results
 	case <-time.After(maxParseTime):
-		result.Errors = append(result.Errors, fmt.Sprintf("parsing timed out after %s", maxParseTime))
-		return result
+		return failed(fmt.Sprintf("parsing timed out after %s", maxParseTime))
 	}
 }
 
 // extractConditionsInternal does the actual parsing work.
 func extractConditionsInternal(yamlContent string) *ParseResult {
-	result := &ParseResult{
-		ComputedFields: make(map[string]string),
-	}
-
-	// Phase 1: YAML deserialization
 	rule, err := parseSigmaRule(yamlContent)
 	if err != nil {
-		result.Errors = append(result.Errors, err.Error())
-		return result
+		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}
+	}
+	return extractRule(rule)
+}
+
+// extractRule extracts the conditions of one parsed rule.
+func extractRule(rule *sigmaRule) *ParseResult {
+	result := &ParseResult{
+		ComputedFields: make(map[string]string),
 	}
 
 	// Copy metadata

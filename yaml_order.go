@@ -69,3 +69,25 @@ func decodeOrdered(node *yaml.Node) (any, error) {
 		return value, nil
 	}
 }
+
+func (m orderedMap) without(key string) orderedMap {
+	out := make(orderedMap, 0, len(m))
+	for _, entry := range m {
+		if entry.key != key {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// with sets key to value, replacing an existing entry in place.
+func (m orderedMap) with(key string, value any) orderedMap {
+	for i, entry := range m {
+		if entry.key == key {
+			out := append(orderedMap(nil), m...)
+			out[i].value = value
+			return out
+		}
+	}
+	return append(m, mapEntry{key: key, value: value})
+}
