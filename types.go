@@ -39,6 +39,8 @@ type ParseResult struct {
 	Level     string     // Rule severity: informational, low, medium, high, critical
 	Status    string     // Rule status: experimental, test, stable, deprecated, unsupported
 	Title     string     // Rule title
+	ID        string     // Rule id
+	Name      string     // Rule name, by which correlations may reference the rule
 	Tags      []string   // MITRE ATT&CK tags and other tags
 	Timeframe string     // Detection timeframe, e.g. "5m"
 }
@@ -95,4 +97,100 @@ const (
 // ClassifyFieldProvenance returns "main" for all Sigma fields (no joins).
 func ClassifyFieldProvenance(_ *ParseResult, _ string) FieldProvenance {
 	return ProvenanceMain
+}
+
+// File is a parsed Sigma file: one rule, a Sigma 1.0 rule collection, or
+// Sigma correlation rules with the rules they reference.
+type File struct {
+	// Rules are the detection rules that match on their own: every rule of
+	// a plain file or collection, minus the rules only correlations use.
+	Rules []*ParseResult
+	// Correlations are the outermost correlations of the file; the rules and
+	// correlations they reference hang off them.
+	Correlations []*Correlation
+	// Errors holds every problem in the file, including its rules' own
+	// parse errors.
+	Errors []string
+}
+
+// CorrelationType is the kind of a Sigma correlation rule.
+type CorrelationType string
+
+const (
+	// CorrelationEventCount counts the events of the referenced rules.
+	CorrelationEventCount CorrelationType = "event_count"
+	// CorrelationValueCount counts the distinct values of Field.
+	CorrelationValueCount CorrelationType = "value_count"
+	// CorrelationValueSum sums the numeric field Field.
+	CorrelationValueSum CorrelationType = "value_sum"
+	// CorrelationValueAvg averages the numeric field Field.
+	CorrelationValueAvg CorrelationType = "value_avg"
+	// CorrelationValuePercentile compares the share, in percent, of the
+	// group's events that carry each value of Field.
+	CorrelationValuePercentile CorrelationType = "value_percentile"
+	// CorrelationTemporal requires the referenced rules to match within the
+	// timespan, in any order.
+	CorrelationTemporal CorrelationType = "temporal"
+	// CorrelationTemporalOrdered requires the referenced rules to match
+	// within the timespan in the order they are listed.
+	CorrelationTemporalOrdered CorrelationType = "temporal_ordered"
+)
+
+// Correlation is a Sigma correlation rule (Sigma 2): it matches when the
+// events of the rules it references, grouped by GroupBy, meet its conditions
+// within Timespan. A Sigma 1 "near" aggregation is read as a temporal
+// correlation of its searches.
+type Correlation struct {
+	Title  string
+	ID     string
+	Name   string
+	Level  string
+	Status string
+	Tags   []string
+
+	Type  CorrelationType
+	Rules []CorrelationRule
+	// GroupBy may name aliases; GroupByFor resolves them per rule.
+	GroupBy []string
+	Aliases map[string]map[string]string // alias -> rule name -> field
+	// Timespan is a number and a unit: s, m, h or d. It is empty for a
+	// Sigma 1 near rule without timeframe, which spans the query's time range.
+	Timespan string
+	// Field is the field value_count and the value metrics read.
+	Field string
+	// Conditions compare the correlation's value with thresholds: one
+	// comparison, or two for a range. Temporal correlations without
+	// conditions require all their rules.
+	Conditions []CorrelationCondition
+	// Generate reports that the referenced rules also match on their own.
+	Generate bool
+}
+
+// CorrelationRule is a rule a correlation references: a detection rule or a
+// correlation.
+type CorrelationRule struct {
+	Name        string // the rule's name, or its id when it has none
+	Rule        *ParseResult
+	Correlation *Correlation
+	// Absent marks a "near ... and not" search: no event may match it.
+	Absent bool
+}
+
+// CorrelationCondition compares a correlation's value with a threshold.
+type CorrelationCondition struct {
+	Operator string // gt, gte, lt, lte, eq or neq
+	Value    float64
+}
+
+// GroupByFor returns the group-by fields of the given referenced rule, with
+// aliases resolved to that rule's field names.
+func (c *Correlation) GroupByFor(rule string) []string {
+	fields := make([]string, len(c.GroupBy))
+	for i, field := range c.GroupBy {
+		fields[i] = field
+		if aliased, ok := c.Aliases[field][rule]; ok {
+			fields[i] = aliased
+		}
+	}
+	return fields
 }

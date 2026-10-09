@@ -12,6 +12,8 @@ import (
 // sigmaRule is the internal representation of a parsed Sigma YAML rule.
 type sigmaRule struct {
 	Title     string
+	ID        string
+	Name      string
 	Status    string
 	Level     string
 	Tags      []string
@@ -27,27 +29,33 @@ type logSource struct {
 	Service  string `yaml:"service"`
 }
 
-// parseSigmaRules parses a Sigma rule file into its rules. A file may be a
-// Sigma 1.0 rule collection: YAML documents where "action: global" sets
+// parseSigmaRules parses the detection rules of a Sigma rule file. A file may
+// be a Sigma 1.0 rule collection: YAML documents where "action: global" sets
 // attributes shared by the rules that follow, "action: reset" clears them,
 // and "action: repeat" repeats the previous rule with its keys changed.
+// Correlation documents are not detection rules and are skipped.
 func parseSigmaRules(yamlContent string) ([]*sigmaRule, error) {
 	documents, err := yamlDocuments(yamlContent)
 	if err != nil {
 		return nil, fmt.Errorf("YAML parse error: %w", err)
 	}
-	ruleDocuments, err := collectionRules(documents)
+	documents, err = collectionDocuments(documents)
 	if err != nil {
 		return nil, err
 	}
-	if len(ruleDocuments) == 0 {
-		return nil, fmt.Errorf("sigma rule missing 'detection' block")
-	}
-	rules := make([]*sigmaRule, len(ruleDocuments))
-	for i, document := range ruleDocuments {
-		if rules[i], err = ruleFromDocument(document); err != nil {
+	var rules []*sigmaRule
+	for _, document := range documents {
+		if isCorrelationDocument(document) {
+			continue
+		}
+		rule, err := ruleFromDocument(document)
+		if err != nil {
 			return nil, err
 		}
+		rules = append(rules, rule)
+	}
+	if len(rules) == 0 {
+		return nil, fmt.Errorf("sigma rule missing 'detection' block")
 	}
 	return rules, nil
 }
@@ -97,9 +105,10 @@ func yamlDocuments(content string) ([]orderedMap, error) {
 	}
 }
 
-// collectionRules applies Sigma collection actions and returns the rule
-// documents, each merged with the global attributes in effect.
-func collectionRules(documents []orderedMap) ([]orderedMap, error) {
+// collectionDocuments applies Sigma collection actions and returns the rule
+// and correlation documents, each merged with the global attributes in
+// effect.
+func collectionDocuments(documents []orderedMap) ([]orderedMap, error) {
 	var global, previous orderedMap
 	var rules []orderedMap
 	for _, document := range documents {
@@ -154,14 +163,11 @@ func ruleFromDocument(document orderedMap) (*sigmaRule, error) {
 		return nil, fmt.Errorf("sigma rule missing 'detection.condition'")
 	}
 	rule.Title = documentString(document, "title")
+	rule.ID = documentString(document, "id")
+	rule.Name = documentString(document, "name")
 	rule.Status = documentString(document, "status")
 	rule.Level = documentString(document, "level")
-	if tags, ok := document.get("tags"); ok {
-		list, _ := tags.([]any)
-		for _, tag := range list {
-			rule.Tags = append(rule.Tags, fmt.Sprintf("%v", tag))
-		}
-	}
+	rule.Tags = documentStrings(document, "tags")
 	if value, ok := document.get("logsource"); ok {
 		source, _ := value.(orderedMap)
 		rule.LogSource = logSource{

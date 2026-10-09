@@ -12,39 +12,20 @@ var (
 
 // ExtractConditions parses a Sigma YAML rule and returns structured conditions.
 // This is the main entry point, matching the API of spl-parser and leql-parser.
-// A rule collection is extracted as the OR of its rules (see ExtractRules).
+// A rule collection is extracted as the OR of its rules (see ExtractFile).
 // Includes 5-second timeout and panic recovery.
 func ExtractConditions(yamlContent string) *ParseResult {
-	results := guardedExtract(yamlContent, func() []*ParseResult {
-		return []*ParseResult{extractConditionsInternal(yamlContent)}
-	})
-	return results[0]
-}
-
-// ExtractRules parses a Sigma YAML file into one result per rule: one for a
-// plain rule, one per rule of a Sigma 1.0 rule collection, each with its own
-// log source. A collection matches when any of its rules matches.
-func ExtractRules(yamlContent string) []*ParseResult {
-	return guardedExtract(yamlContent, func() []*ParseResult {
-		rules, err := parseSigmaRules(yamlContent)
-		if err != nil {
-			return []*ParseResult{{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}}
-		}
-		results := make([]*ParseResult, len(rules))
-		for i, rule := range rules {
-			results[i] = extractRule(rule)
-		}
-		return results
+	return guarded(yamlContent, func() *ParseResult {
+		return extractConditionsInternal(yamlContent)
+	}, func(message string) *ParseResult {
+		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{message}}
 	})
 }
 
-// guardedExtract runs an extraction with the parse timeout and panic
-// recovery, reporting either as a single errored result.
-func guardedExtract(yamlContent string, extract func() []*ParseResult) []*ParseResult {
-	failed := func(message string) []*ParseResult {
-		return []*ParseResult{{ComputedFields: make(map[string]string), Errors: []string{message}}}
-	}
-	done := make(chan []*ParseResult, 1)
+// guarded runs an extraction with the parse timeout and panic recovery,
+// reporting either through failed.
+func guarded[T any](yamlContent string, extract func() T, failed func(message string) T) T {
+	done := make(chan T, 1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -58,8 +39,8 @@ func guardedExtract(yamlContent string, extract func() []*ParseResult) []*ParseR
 	}()
 
 	select {
-	case results := <-done:
-		return results
+	case result := <-done:
+		return result
 	case <-time.After(maxParseTime):
 		return failed(fmt.Sprintf("parsing timed out after %s", maxParseTime))
 	}
@@ -82,6 +63,8 @@ func extractRule(rule *sigmaRule) *ParseResult {
 
 	// Copy metadata
 	result.Title = rule.Title
+	result.ID = rule.ID
+	result.Name = rule.Name
 	result.Level = rule.Level
 	result.Status = rule.Status
 	result.Tags = rule.Tags

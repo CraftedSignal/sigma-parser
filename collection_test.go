@@ -34,7 +34,7 @@ detection:
         - evil
     condition: keywords
 `
-	rules := ExtractRules(collection)
+	rules := ExtractFile(collection).Rules
 	if len(rules) != 3 {
 		t.Fatalf("expected 3 rules, got %d: %+v", len(rules), rules)
 	}
@@ -73,7 +73,7 @@ detection:
 		t.Fatalf("expected all three rules' conditions, got %+v", leaves)
 	}
 
-	if rules := ExtractRules("action: repeat\ndetection:\n  sel:\n    a: b\n  condition: sel\n"); len(rules[0].Errors) == 0 {
+	if file := ExtractFile("action: repeat\ndetection:\n  sel:\n    a: b\n  condition: sel\n"); len(file.Errors) == 0 {
 		t.Fatal("expected a repeat without a previous rule to be rejected")
 	}
 }

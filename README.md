@@ -108,12 +108,13 @@ fmt.Println(result.Commands)      // [count]
 | Quantifiers (1 of, any of, all of) | Supported; `*` anywhere in patterns, `_` identifiers excluded |
 | Threshold quantifiers (N of) | Extension; `N of selection` on one named selection counts its values |
 | Aggregation (count/sum/min/max/avg) | Supported |
-| Near aggregation | Parsed |
+| Near aggregation | Supported; `ExtractFile` reads it as a temporal correlation |
 | Timeframe | Supported |
 | LogSource metadata | Supported |
 | Tags (MITRE ATT&CK) | Supported |
 | Multiple condition strings | Supported |
-| Rule collections (action global/reset/repeat) | Supported; `ExtractRules` returns each rule |
+| Rule collections (action global/reset/repeat) | Supported; `ExtractFile` returns each rule |
+| Correlation rules, v2.1.0 (all types, aliases, chaining) | Supported; `ExtractFile` resolves references by name or id within the file |
 
 ## API Reference
 
@@ -146,7 +147,12 @@ type ParseResult struct {
 ### Functions
 
 ```go
+// ExtractConditions parses a rule; a collection is read as the OR of its rules.
 func ExtractConditions(yamlContent string) *ParseResult
+
+// ExtractFile parses a file into its standalone rules and its outermost
+// correlations, with the rules and correlations they reference resolved.
+func ExtractFile(yamlContent string) *File
 ```
 
 ## Testing
