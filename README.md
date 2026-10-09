@@ -106,6 +106,7 @@ fmt.Println(result.Commands)      // [count]
 | All 18 modifiers | Supported |
 | Condition expressions | Supported |
 | Quantifiers (1 of, all of) | Supported |
+| Threshold quantifiers (N of) | Extension; `N of selection` on one named selection counts its values |
 | Aggregation (count/sum/min/max/avg) | Supported |
 | Near aggregation | Supported |
 | Timeframe | Supported |

@@ -1,6 +1,9 @@
 package sigma
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestExpressionPreservesCrossFieldOr(t *testing.T) {
 	result := ExtractConditions(`
@@ -81,9 +84,60 @@ detection:
     Image:
       - cmd.exe
       - powershell.exe
-  condition: 2 of selection
+  condition: 3 of selection
 `)
 	if len(result.Errors) == 0 {
 		t.Fatal("expected impossible threshold to be rejected")
+	}
+}
+
+func TestExpressionCountsValuesOfSingleSelectionThreshold(t *testing.T) {
+	result := ExtractConditions(`
+title: Two evasive PowerShell flags
+detection:
+  selection_image:
+    Image|endswith: '\powershell.exe'
+  flags:
+    CommandLine|contains:
+      - '-NoProfile'
+      - '-EncodedCommand'
+      - '-NoProfile'
+      - '-NonInteractive'
+  condition: selection_image and 2 of flags
+`)
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	if result.Expression == nil || result.Expression.Kind != ExpressionAnd || len(result.Expression.Children) != 2 {
+		t.Fatalf("expected image AND flag threshold, got %#v", result.Expression)
+	}
+	threshold := result.Expression.Children[1]
+	if threshold.Kind != ExpressionThreshold || threshold.Threshold != 2 {
+		t.Fatalf("expected 2-of threshold, got %#v", threshold)
+	}
+	var values []string
+	for _, child := range threshold.Children {
+		if child.Kind != ExpressionCondition || child.Condition.Field != "CommandLine" || child.Condition.Operator != "contains" || len(child.Condition.Alternatives) != 0 {
+			t.Fatalf("expected one contains condition per value, got %#v", child)
+		}
+		values = append(values, child.Condition.Value)
+	}
+	if want := []string{"-NoProfile", "-EncodedCommand", "-NonInteractive"}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("threshold values = %v, want %v", values, want)
+	}
+}
+
+func TestExpressionWildcardThresholdStillCountsSelections(t *testing.T) {
+	result := ExtractConditions(`
+title: Wildcard threshold over one selection
+detection:
+  selection_flags:
+    CommandLine|contains:
+      - '-NoProfile'
+      - '-EncodedCommand'
+  condition: 2 of selection_*
+`)
+	if len(result.Errors) == 0 {
+		t.Fatal("expected 2 of a wildcard matching one selection to be rejected")
 	}
 }

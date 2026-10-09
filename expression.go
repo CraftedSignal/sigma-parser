@@ -1,6 +1,9 @@
 package sigma
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 func buildExpression(node condNode, items map[string]*detectionItem) *Expression {
 	switch typedNode := node.(type) {
@@ -38,6 +41,12 @@ func buildExpression(node condNode, items map[string]*detectionItem) *Expression
 		threshold, err := strconv.Atoi(typedNode.quantifier)
 		if err != nil || threshold <= 1 {
 			return compactExpression(ExpressionOr, children)
+		}
+		if len(children) == 1 && !isWildcardPattern(typedNode.pattern) {
+			// One named selection can never satisfy "N of" for N > 1, so count
+			// its alternatives instead: "2 of flags" means at least two of the
+			// values listed under flags match.
+			children = expressionAlternatives(children[0])
 		}
 		return &Expression{Kind: ExpressionThreshold, Children: children, Threshold: threshold}
 	default:
@@ -95,6 +104,35 @@ func expressionFromConditions(conditions []Condition) *Expression {
 	}
 	flushAnd()
 	return compactExpression(ExpressionOr, orChildren)
+}
+
+func isWildcardPattern(pattern string) bool {
+	return pattern == "them" || strings.Contains(pattern, "*")
+}
+
+// expressionAlternatives splits an expression into its distinct OR'd
+// alternatives, including the values of a multi-valued condition.
+func expressionAlternatives(expression *Expression) []*Expression {
+	switch {
+	case expression.Kind == ExpressionOr:
+		return expression.Children
+	case expression.Kind == ExpressionCondition && len(expression.Condition.Alternatives) > 1:
+		seen := make(map[string]bool, len(expression.Condition.Alternatives))
+		alternatives := make([]*Expression, 0, len(expression.Condition.Alternatives))
+		for _, value := range expression.Condition.Alternatives {
+			if seen[value] {
+				continue
+			}
+			seen[value] = true
+			condition := *expression.Condition
+			condition.Value = value
+			condition.Alternatives = nil
+			alternatives = append(alternatives, &Expression{Kind: ExpressionCondition, Condition: &condition})
+		}
+		return alternatives
+	default:
+		return []*Expression{expression}
+	}
 }
 
 func compactExpression(kind ExpressionKind, children []*Expression) *Expression {
