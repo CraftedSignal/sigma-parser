@@ -115,6 +115,7 @@ fmt.Println(result.Commands)      // [count]
 | Multiple condition strings | Supported |
 | Rule collections (action global/reset/repeat) | Supported; `ExtractFile` returns each rule |
 | Correlation rules, v2.1.0 (all types, aliases, chaining) | Supported; `ExtractFile` resolves references by name or id within the file |
+| Warnings | `Warnings` flags exact command-line values that can only be a parameter, such as `CommandLine: -NoProfile` |
 
 ## API Reference
 
@@ -135,7 +136,8 @@ type ParseResult struct {
     GroupByFields  []string          // From aggregation group-by
     ComputedFields map[string]string // Always empty for Sigma
     Commands       []string          // Aggregation functions detected
-    Errors         []string          // Parse warnings
+    Errors         []string          // Parse errors: the rule is not valid Sigma
+    Warnings       []string          // Valid Sigma that likely does not match as meant
     LogSource      *LogSource        // category/product/service
     Level          string            // informational, low, medium, high, critical
     Status         string            // experimental, test, stable

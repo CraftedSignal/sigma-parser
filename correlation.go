@@ -113,7 +113,32 @@ func extractFile(yamlContent string) *File {
 		}
 		file.Errors = append(file.Errors, prefixed(n.key(), n.rule.Errors)...)
 	}
+	file.Warnings = fileWarnings(file.DetectionRules())
 	return file
+}
+
+// fileWarnings collects the warnings of a file's detection rules, naming the
+// rule when the file holds several.
+func fileWarnings(rules []*ParseResult) []string {
+	keys := map[string]bool{}
+	for _, rule := range rules {
+		keys[firstNonEmpty(rule.Name, rule.ID, rule.Title)] = true
+	}
+	var warnings []string
+	seen := map[string]bool{}
+	for _, rule := range rules {
+		ruleWarnings := rule.Warnings
+		if len(keys) > 1 {
+			ruleWarnings = prefixed(firstNonEmpty(rule.Name, rule.ID, rule.Title), ruleWarnings)
+		}
+		for _, warning := range ruleWarnings {
+			if !seen[warning] {
+				seen[warning] = true
+				warnings = append(warnings, warning)
+			}
+		}
+	}
+	return warnings
 }
 
 // DetectionRules returns every detection rule of the file: the rules that

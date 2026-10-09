@@ -91,6 +91,7 @@ func extractRule(rule *sigmaRule) *ParseResult {
 	result.Errors = append(result.Errors, conditionReferenceErrors(ast, items)...)
 	result.Expression = buildExpression(ast, items)
 	result.Errors = append(result.Errors, validateExpression(result.Expression)...)
+	result.Warnings = commandLineWarnings(result.Expression)
 
 	// Phase 4: Evaluate AST → conditions
 	conditions := evaluateAST(ast, items, false)

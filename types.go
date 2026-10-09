@@ -32,7 +32,8 @@ type ParseResult struct {
 	ComputedFields map[string]string // Always empty for Sigma
 	Commands       []string          // Aggregation commands detected (e.g., "count", "sum")
 	Joins          []JoinInfo        // Always empty for Sigma (no joins)
-	Errors         []string          // Parse errors and warnings
+	Errors         []string          // Parse errors: the rule is not valid Sigma
+	Warnings       []string          // Valid Sigma that likely does not match as meant, such as CommandLine: -NoProfile
 
 	// Sigma-specific metadata (additive — doesn't break adapter compatibility)
 	LogSource *LogSource // Log source from the rule
@@ -111,6 +112,10 @@ type File struct {
 	// Errors holds every problem in the file, including its rules' own
 	// parse errors.
 	Errors []string
+	// Warnings holds what the file's rules likely do not match as meant,
+	// such as CommandLine: -NoProfile, which only matches a command line
+	// that is exactly -NoProfile.
+	Warnings []string
 }
 
 // CorrelationType is the kind of a Sigma correlation rule.
