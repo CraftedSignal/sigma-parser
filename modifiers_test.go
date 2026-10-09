@@ -1,287 +1,242 @@
 package sigma
 
 import (
-	"encoding/base64"
-	"strings"
+	"reflect"
 	"testing"
 )
 
-func TestParseModifiers_NoModifier(t *testing.T) {
-	field, result := parseModifiers("CommandLine", []string{"test.exe"})
-	if field != "CommandLine" {
-		t.Errorf("expected field 'CommandLine', got %q", field)
+// expressionLeaves lists the conditions of an expression in order.
+func expressionLeaves(expression *Expression) []Condition {
+	if expression == nil {
+		return nil
 	}
-	if result.operator != "=" {
-		t.Errorf("expected operator '=', got %q", result.operator)
+	if expression.Kind == ExpressionCondition {
+		return []Condition{*expression.Condition}
 	}
-	if result.allOf {
-		t.Error("expected allOf=false")
+	var out []Condition
+	for _, child := range expression.Children {
+		out = append(out, expressionLeaves(child)...)
 	}
+	return out
 }
 
-func TestParseModifiers_Contains(t *testing.T) {
-	field, result := parseModifiers("CommandLine|contains", []string{"mimikatz"})
-	if field != "CommandLine" {
-		t.Errorf("expected field 'CommandLine', got %q", field)
+func conditionValues(condition Condition) []string {
+	if len(condition.Alternatives) > 0 {
+		return condition.Alternatives
 	}
-	if result.operator != "contains" {
-		t.Errorf("expected operator 'contains', got %q", result.operator)
-	}
+	return []string{condition.Value}
 }
 
-func TestParseModifiers_StartsWith(t *testing.T) {
-	_, result := parseModifiers("Image|startswith", []string{`C:\Windows\`})
-	if result.operator != "startswith" {
-		t.Errorf("expected operator 'startswith', got %q", result.operator)
+func mustFieldExpression(t *testing.T, fieldWithMods string, value any) *Expression {
+	t.Helper()
+	expr, _, errs := fieldExpression(fieldWithMods, value)
+	if len(errs) > 0 {
+		t.Fatalf("%s: unexpected errors %v", fieldWithMods, errs)
 	}
+	return expr
 }
 
-func TestParseModifiers_EndsWith(t *testing.T) {
-	_, result := parseModifiers("Image|endswith", []string{".exe"})
-	if result.operator != "endswith" {
-		t.Errorf("expected operator 'endswith', got %q", result.operator)
-	}
-}
-
-func TestParseModifiers_Regex(t *testing.T) {
-	_, result := parseModifiers("CommandLine|re", []string{`.*mimikatz.*`})
-	if result.operator != "matches" {
-		t.Errorf("expected operator 'matches', got %q", result.operator)
-	}
-}
-
-func TestParseModifiers_CIDR(t *testing.T) {
-	_, result := parseModifiers("DestinationIp|cidr", []string{"10.0.0.0/8"})
-	if result.operator != "cidrmatch" {
-		t.Errorf("expected operator 'cidrmatch', got %q", result.operator)
-	}
-}
-
-func TestParseModifiers_Comparison(t *testing.T) {
-	tests := []struct {
-		mod string
-		op  string
+func TestFieldModifiersProduceSpecConditions(t *testing.T) {
+	cases := []struct {
+		name          string
+		field         string
+		value         any
+		operator      string
+		values        []string
+		caseSensitive bool
 	}{
-		{"gt", ">"},
-		{"gte", ">="},
-		{"lt", "<"},
-		{"lte", "<="},
+		{"plain value is an exact match", "Image", `C:\Windows\cmd.exe`, "=", []string{`C:\Windows\cmd.exe`}, false},
+		{"contains", "CommandLine|contains", "mimikatz", "contains", []string{"mimikatz"}, false},
+		{"startswith", "Image|startswith", `C:\Windows\`, "startswith", []string{`C:\Windows\`}, false},
+		{"endswith", "Image|endswith", ".exe", "endswith", []string{".exe"}, false},
+		{"modifier names are case-insensitive", "Image|ENDSWITH", ".exe", "endswith", []string{".exe"}, false},
+		{"regex is case-sensitive by default", "CommandLine|re", `\d{3}`, "matches", []string{`\d{3}`}, true},
+		{"regex i flag", "CommandLine|re|i", "abc", "matches", []string{"abc"}, false},
+		{"ignorecase alias", "CommandLine|re|ignorecase", "abc", "matches", []string{"abc"}, false},
+		{"cidr", "DestinationIp|cidr", "10.0.0.0/8", "cidrmatch", []string{"10.0.0.0/8"}, false},
+		{"ipv6 cidr", "DestinationIp|cidr", "fe80::/10", "cidrmatch", []string{"fe80::/10"}, false},
+		{"gt", "EventID|gt", 10, ">", []string{"10"}, false},
+		{"gte", "EventID|gte", 10, ">=", []string{"10"}, false},
+		{"lt", "EventID|lt", 10, "<", []string{"10"}, false},
+		{"lte", "EventID|lte", 10.5, "<=", []string{"10.5"}, false},
+		{"exists true", "FieldName|exists", true, "exists", []string{"true"}, false},
+		{"exists false", "FieldName|exists", false, "exists", []string{"false"}, false},
+		{"cased", "Image|cased|endswith", `\CMD.exe`, "endswith", []string{`\CMD.exe`}, true},
+		{"list values are alternatives", "Image|endswith", []any{`\a.exe`, `\b.exe`}, "endswith", []string{`\a.exe`, `\b.exe`}, false},
+		{"numbers match as written", "EventID", []any{4688, 1}, "=", []string{"4688", "1"}, false},
+		{"base64", "CommandLine|base64", "test", "=", []string{"dGVzdA=="}, false},
+		{"base64 then contains", "CommandLine|base64|contains", "test", "contains", []string{"dGVzdA=="}, false},
+		{"base64offset", "CommandLine|base64offset|contains", "test", "contains", []string{"dGVzd", "Rlc3", "0ZXN0"}, false},
+		{"wide is utf16le", "CommandLine|wide", "test", "=", []string{"t\x00e\x00s\x00t\x00"}, false},
+		{"utf16be", "CommandLine|utf16be", "A", "=", []string{"\x00A"}, false},
+		{"utf16 adds a byte order mark", "CommandLine|utf16", "A", "=", []string{"\xff\xfeA\x00"}, false},
+		{"utf16le then base64offset", "CommandLine|utf16le|base64offset|contains", "ping", "contains", []string{"cABpAG4AZw", "AAaQBuAGcA", "wAGkAbgBnA"}, false},
 	}
-	for _, tt := range tests {
-		_, result := parseModifiers("EventID|"+tt.mod, []string{"10"})
-		if result.operator != tt.op {
-			t.Errorf("modifier %q: expected operator %q, got %q", tt.mod, tt.op, result.operator)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			leaves := expressionLeaves(mustFieldExpression(t, tc.field, tc.value))
+			if len(leaves) != 1 {
+				t.Fatalf("expected one condition, got %+v", leaves)
+			}
+			got := leaves[0]
+			if got.Operator != tc.operator || got.CaseSensitive != tc.caseSensitive || !reflect.DeepEqual(conditionValues(got), tc.values) {
+				t.Fatalf("got operator=%q values=%q cased=%v, want %q %q %v", got.Operator, conditionValues(got), got.CaseSensitive, tc.operator, tc.values, tc.caseSensitive)
+			}
+		})
+	}
+}
+
+func TestWildcardsAndEscapesFollowTheSpec(t *testing.T) {
+	cases := []struct {
+		name     string
+		field    string
+		value    string
+		operator string
+		want     string
+	}{
+		{"leading wildcard is endswith", "Image", `*\cmd.exe`, "endswith", `\cmd.exe`},
+		{"trailing wildcard is startswith", "Image", `C:\Program Files*`, "startswith", `C:\Program Files`},
+		{"backslash star is an escaped literal star", "Image", `C:\Windows\*`, "matches", `^C:\\Windows\*$`},
+		{"wildcards on both ends are contains", "CommandLine", `*whoami*`, "contains", `whoami`},
+		{"inner wildcard is a regex", "CommandLine|contains", `cmd*/c`, "matches", `cmd.*/c`},
+		{"single wildcard is a regex", "Image", `prog?.exe`, "matches", `^prog.\.exe$`},
+		{"escaped wildcard is a literal star", "CommandLine|contains", `a\*b`, "matches", `a\*b`},
+		{"double backslash is one backslash", "Image|startswith", `\\\\server\\share`, "startswith", `\\server\share`},
+		{"backslash before a letter is literal", "Image", `C:\Windows\x.exe`, "=", `C:\Windows\x.exe`},
+		{"escaped backslash before a wildcard", "Image", `C:\\*`, "startswith", `C:\`},
+		{"bare wildcard tests existence", "User", `*`, "exists", "true"},
+		{"empty string is an exact empty match", "User", ``, "=", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			leaves := expressionLeaves(mustFieldExpression(t, tc.field, tc.value))
+			if len(leaves) != 1 || leaves[0].Operator != tc.operator || leaves[0].Value != tc.want {
+				t.Fatalf("got %+v, want operator %q value %q", leaves, tc.operator, tc.want)
+			}
+		})
+	}
+}
+
+func TestWindashExpandsWordStartFlagsLikePySigma(t *testing.T) {
+	leaves := expressionLeaves(mustFieldExpression(t, "CommandLine|windash|contains", " -exec bypass"))
+	want := []string{" -exec bypass", " /exec bypass", " –exec bypass", " —exec bypass", " ―exec bypass"}
+	if len(leaves) != 1 || !reflect.DeepEqual(conditionValues(leaves[0]), want) {
+		t.Fatalf("got %+v, want values %q", leaves, want)
+	}
+
+	// A dash inside a word is not a flag and stays as written.
+	leaves = expressionLeaves(mustFieldExpression(t, "CommandLine|windash|contains", "x-forwarded"))
+	if values := conditionValues(leaves[0]); len(values) != 1 || values[0] != "x-forwarded" {
+		t.Fatalf("expected an in-word dash to stay, got %q", values)
+	}
+
+	// Every flag of a value expands: two flags give 5 x 5 variants.
+	leaves = expressionLeaves(mustFieldExpression(t, "CommandLine|windash|contains", "-a -b"))
+	if values := conditionValues(leaves[0]); len(values) != 25 {
+		t.Fatalf("expected 25 permutations, got %d: %q", len(values), values)
+	}
+}
+
+func TestAllLinksValuesNotTheirExpansions(t *testing.T) {
+	expr := mustFieldExpression(t, "CommandLine|windash|contains|all", []any{" -a ", " -b "})
+	if expr.Kind != ExpressionAnd || len(expr.Children) != 2 {
+		t.Fatalf("expected an AND of the two values, got %#v", expr)
+	}
+	for i, flag := range []string{"a", "b"} {
+		values := conditionValues(*expr.Children[i].Condition)
+		if len(values) != 5 || values[0] != " -"+flag+" " || values[1] != " /"+flag+" " {
+			t.Fatalf("value %d should OR its windash variants, got %q", i, values)
 		}
 	}
 }
 
-func TestParseModifiers_Exists(t *testing.T) {
-	_, result := parseModifiers("FieldName|exists", []string{"true"})
-	if result.operator != "exists" {
-		t.Errorf("expected operator 'exists', got %q", result.operator)
+func TestNeqNegatesTheWholeEntry(t *testing.T) {
+	expr := mustFieldExpression(t, "User|neq", []any{"SYSTEM", "LOCAL SERVICE"})
+	if expr.Kind != ExpressionNot || expr.Children[0].Kind != ExpressionCondition {
+		t.Fatalf("expected NOT around the value list, got %#v", expr)
+	}
+	if values := conditionValues(*expr.Children[0].Condition); !reflect.DeepEqual(values, []string{"SYSTEM", "LOCAL SERVICE"}) {
+		t.Fatalf("expected both values under the negation, got %q", values)
+	}
+	flat := flattenExpression(expr, false)
+	if len(flat) != 1 || !flat[0].Negated {
+		t.Fatalf("flat view should negate the condition, got %+v", flat)
 	}
 }
 
-func TestParseModifiers_FieldRef(t *testing.T) {
-	_, result := parseModifiers("SubjectUserName|fieldref", []string{"TargetUserName"})
-	if result.operator != "=" || !result.fieldReference {
-		t.Errorf("expected equality field reference, got operator=%q fieldReference=%v", result.operator, result.fieldReference)
+func TestRegexFlagsAndTimeModifiers(t *testing.T) {
+	leaves := expressionLeaves(mustFieldExpression(t, "Payload|re|m|s|i", "^a.b$"))
+	if c := leaves[0]; !c.Multiline || !c.DotAll || c.CaseSensitive {
+		t.Fatalf("expected m, s and i flags, got %+v", c)
+	}
+	leaves = expressionLeaves(mustFieldExpression(t, "Payload|re|multiline|dotall", "a"))
+	if c := leaves[0]; !c.Multiline || !c.DotAll || !c.CaseSensitive {
+		t.Fatalf("expected multiline and dotall aliases, got %+v", c)
+	}
+	leaves = expressionLeaves(mustFieldExpression(t, "Payload|re|startswith", "a|b"))
+	if leaves[0].Value != "^(?:a|b)" {
+		t.Fatalf("startswith should anchor the regex start, got %q", leaves[0].Value)
+	}
+
+	leaves = expressionLeaves(mustFieldExpression(t, "LogonTime|hour", []any{22, 23}))
+	if c := leaves[0]; c.DatePart != "hour" || c.Operator != "=" || !reflect.DeepEqual(conditionValues(c), []string{"22", "23"}) {
+		t.Fatalf("expected hour equality alternatives, got %+v", c)
+	}
+	leaves = expressionLeaves(mustFieldExpression(t, "LogonTime|hour|gte", 22))
+	if c := leaves[0]; c.DatePart != "hour" || c.Operator != ">=" || c.Value != "22" {
+		t.Fatalf("expected an hour comparison, got %+v", c)
 	}
 }
 
-func TestParseModifiers_All(t *testing.T) {
-	_, result := parseModifiers("CommandLine|contains|all", []string{"-nop", "-w hidden"})
-	if result.operator != "contains" {
-		t.Errorf("expected operator 'contains', got %q", result.operator)
+func TestFieldReferences(t *testing.T) {
+	leaves := expressionLeaves(mustFieldExpression(t, "SubjectUserName|fieldref", []any{"TargetUserName", "UserName"}))
+	if len(leaves) != 2 || leaves[0].ValueReference != "TargetUserName" || leaves[1].ValueReference != "UserName" || leaves[0].Operator != "=" {
+		t.Fatalf("expected one equality reference per field, got %+v", leaves)
 	}
-	if !result.allOf {
-		t.Error("expected allOf=true")
-	}
-}
-
-func TestParseModifiers_Base64(t *testing.T) {
-	_, result := parseModifiers("CommandLine|base64", []string{"test"})
-	encoded := base64.StdEncoding.EncodeToString([]byte("test"))
-	found := false
-	for _, v := range result.values {
-		if v == encoded {
-			found = true
-			break
+	for _, field := range []string{"Image|fieldref|endswith", "Image|endswith|fieldref"} {
+		leaves = expressionLeaves(mustFieldExpression(t, field, "OriginalFileName"))
+		if leaves[0].Operator != "endswith" || leaves[0].ValueReference != "OriginalFileName" {
+			t.Fatalf("%s: expected an endswith field reference, got %+v", field, leaves[0])
 		}
 	}
-	if !found {
-		t.Errorf("expected base64 encoded value %q in %v", encoded, result.values)
-	}
 }
 
-func TestParseModifiers_Base64Offset(t *testing.T) {
-	_, result := parseModifiers("CommandLine|base64offset", []string{"test"})
-	if len(result.values) != 3 {
-		t.Errorf("expected 3 values for base64offset, got %d: %v", len(result.values), result.values)
-	}
-}
-
-func TestParseModifiers_Wide(t *testing.T) {
-	_, result := parseModifiers("CommandLine|wide", []string{"test"})
-	if len(result.values) != 1 || result.values[0] != "t\x00e\x00s\x00t\x00" {
-		t.Errorf("expected only UTF-16LE value, got %v", result.values)
-	}
-}
-
-func TestParseModifiers_Windash(t *testing.T) {
-	_, result := parseModifiers("CommandLine|windash", []string{"-exec"})
-	found := false
-	for _, v := range result.values {
-		if v == "/exec" {
-			found = true
-			break
+func TestNullTestsAbsence(t *testing.T) {
+	for _, value := range []any{nil, []any{}} {
+		leaves := expressionLeaves(mustFieldExpression(t, "PasswordLastSet", value))
+		if len(leaves) != 1 || leaves[0].Operator != "exists" || leaves[0].Value != "false" {
+			t.Fatalf("null should test absence, got %+v", leaves)
 		}
 	}
-	if !found {
-		t.Errorf("expected '/exec' variant in %v", result.values)
+	// A null in a value list ORs an absence test, as pySigma does.
+	expr := mustFieldExpression(t, "ParentImage|endswith", []any{`\explorer.exe`, nil})
+	leaves := expressionLeaves(expr)
+	if expr.Kind != ExpressionOr || len(leaves) != 2 || leaves[0].Operator != "endswith" || leaves[1].Operator != "exists" || leaves[1].Value != "false" {
+		t.Fatalf("expected value OR absent, got %#v", expr)
 	}
 }
 
-func TestParseModifiers_WindashSlash(t *testing.T) {
-	_, result := parseModifiers("CommandLine|windash", []string{"/exec"})
-	found := false
-	for _, v := range result.values {
-		if v == "-exec" {
-			found = true
-			break
+func TestInvalidModifierChainsAreRejected(t *testing.T) {
+	cases := map[string]any{
+		"CommandLine|contains~":           "x",
+		"CommandLine|i":                   "x",
+		"CommandLine|re|cased":            "x",
+		"CommandLine|contains|re":         "x",
+		"DestinationIp|contains|cidr":     "10.0.0.0/8",
+		"DestinationIp|cidr":              "not-a-network",
+		"EventID|gt":                      "ten",
+		"EventID|contains|gt":             10,
+		"LogonTime|hour":                  "late",
+		"FieldName|exists":                "maybe",
+		"CommandLine|contains|base64":     "x",
+		"CommandLine|base64":              "a*b",
+		"CommandLine|re|windash":          "x",
+		"CommandLine|fieldref|contains|x": "y",
+		"ProcessId|fieldref|contains|gt":  "ParentProcessId",
+	}
+	for field, value := range cases {
+		if expr, _, errs := fieldExpression(field, value); len(errs) == 0 {
+			t.Errorf("%s: %v should be rejected, got %#v", field, value, expr)
 		}
-	}
-	if !found {
-		t.Errorf("expected '-exec' variant in %v", result.values)
-	}
-}
-
-func TestParseModifiers_ContainsAll(t *testing.T) {
-	_, result := parseModifiers("CommandLine|contains|all", []string{"a", "b", "c"})
-	if result.operator != "contains" {
-		t.Errorf("expected 'contains', got %q", result.operator)
-	}
-	if !result.allOf {
-		t.Error("expected allOf=true")
-	}
-	if len(result.values) != 3 {
-		t.Errorf("expected 3 values, got %d", len(result.values))
-	}
-}
-
-func TestParseModifiers_CaseInsensitive(t *testing.T) {
-	_, result := parseModifiers("Field|CONTAINS|ALL", []string{"test"})
-	if result.operator != "contains" {
-		t.Errorf("expected 'contains', got %q", result.operator)
-	}
-	if !result.allOf {
-		t.Error("expected allOf=true")
-	}
-}
-
-func TestParseModifiers_UTF16LE(t *testing.T) {
-	_, result := parseModifiers("Field|utf16le", []string{"A"})
-	if len(result.values) != 1 {
-		t.Fatalf("expected one value, got %d", len(result.values))
-	}
-	// UTF16LE of "A" is 0x41 0x00
-	utf16Val := result.values[0]
-	if len(utf16Val) != 2 || utf16Val[0] != 0x41 || utf16Val[1] != 0x00 {
-		t.Errorf("expected UTF-16LE encoding of 'A', got %v", []byte(utf16Val))
-	}
-}
-
-func TestParseModifiers_UTF16BE(t *testing.T) {
-	_, result := parseModifiers("Field|utf16be", []string{"A"})
-	if len(result.values) != 1 {
-		t.Fatalf("expected one value, got %d", len(result.values))
-	}
-	// UTF16BE of "A" is 0x00 0x41
-	utf16Val := result.values[0]
-	if len(utf16Val) != 2 || utf16Val[0] != 0x00 || utf16Val[1] != 0x41 {
-		t.Errorf("expected UTF-16BE encoding of 'A', got %v", []byte(utf16Val))
-	}
-}
-
-func TestParseModifiers_Expand(t *testing.T) {
-	_, result := parseModifiers("CommandLine|expand", []string{"%APPDATA%\\test"})
-	if !result.requiresExpansion || len(result.errors) != 0 {
-		t.Fatalf("expected lossless expansion marker, got %#v", result)
-	}
-}
-
-func TestParseModifiers_RegexCaseSensitivity(t *testing.T) {
-	_, sensitive := parseModifiers("TargetFilename|re", []string{"^test$"})
-	if !sensitive.caseSensitive {
-		t.Fatal("Sigma regex must be case-sensitive unless the i flag is present")
-	}
-	_, insensitive := parseModifiers("TargetFilename|re|i", []string{"^test$"})
-	if insensitive.caseSensitive || len(insensitive.errors) != 0 {
-		t.Fatalf("expected valid case-insensitive regex, got %#v", insensitive)
-	}
-}
-
-func TestParseModifiers_ChainedModifiers(t *testing.T) {
-	// base64 + contains
-	_, result := parseModifiers("CommandLine|base64|contains", []string{"test"})
-	if result.operator != "contains" {
-		t.Errorf("expected 'contains', got %q", result.operator)
-	}
-	// Should have original + base64 encoded
-	foundEncoded := false
-	for _, v := range result.values {
-		if strings.Contains(v, "=") || len(v) > len("test") {
-			foundEncoded = true
-			break
-		}
-	}
-	if !foundEncoded {
-		t.Log("Note: base64+contains chain produced:", result.values)
-	}
-}
-
-func TestParseModifiers_Cased(t *testing.T) {
-	field, result := parseModifiers("FieldName|cased", []string{"CasedValue"})
-	if field != "FieldName" {
-		t.Errorf("expected field 'FieldName', got %q", field)
-	}
-	if result.operator != "=" {
-		t.Errorf("expected operator '=', got %q", result.operator)
-	}
-	if !result.caseSensitive {
-		t.Error("expected caseSensitive=true for |cased modifier")
-	}
-}
-
-func TestParseModifiers_ContainsCased(t *testing.T) {
-	field, result := parseModifiers("CommandLine|contains|cased", []string{"Mimikatz"})
-	if field != "CommandLine" {
-		t.Errorf("expected field 'CommandLine', got %q", field)
-	}
-	if result.operator != "contains" {
-		t.Errorf("expected operator 'contains', got %q", result.operator)
-	}
-	if !result.caseSensitive {
-		t.Error("expected caseSensitive=true for |contains|cased chain")
-	}
-}
-
-func TestParseModifiers_CasedAll(t *testing.T) {
-	_, result := parseModifiers("Image|endswith|cased|all", []string{"cmd.exe", "powershell.exe"})
-	if result.operator != "endswith" {
-		t.Errorf("expected operator 'endswith', got %q", result.operator)
-	}
-	if !result.caseSensitive {
-		t.Error("expected caseSensitive=true")
-	}
-	if !result.allOf {
-		t.Error("expected allOf=true")
-	}
-}
-
-func TestParseModifiers_NoCased(t *testing.T) {
-	_, result := parseModifiers("CommandLine|contains", []string{"test"})
-	if result.caseSensitive {
-		t.Error("expected caseSensitive=false when |cased not present")
 	}
 }

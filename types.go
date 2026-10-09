@@ -1,13 +1,21 @@
 package sigma
 
 // Condition represents a single field condition extracted from a Sigma rule.
+//
+// String values follow Sigma semantics: for "=", "contains", "startswith",
+// "endswith" and "keyword" the Value is a literal with escapes resolved, and
+// a value whose wildcards (`*`, `?`) cannot be expressed by those operators
+// becomes a "matches" regular expression.
 type Condition struct {
 	Field             string   // Field name (empty for keyword conditions)
-	Operator          string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "fieldref", "keyword"
+	Operator          string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "keyword"
 	Value             string   // The condition value
-	ValueReference    string   // Referenced field name for |fieldref
+	ValueReference    string   // Referenced field name for |fieldref (Operator gives the match position)
 	Negated           bool     // True if condition is negated (NOT)
-	CaseSensitive     bool     // True if |cased modifier is used (matching must be case-sensitive)
+	CaseSensitive     bool     // True for |cased strings and for regexes without |i
+	Multiline         bool     // Regex |m: ^ and $ match at line breaks
+	DotAll            bool     // Regex |s: . also matches line breaks
+	DatePart          string   // minute, hour, day, week, month or year: compare that part of a timestamp field
 	RequiresExpansion bool     // True if |expand placeholders require a processing pipeline
 	PipeStage         int      // Always 0 for Sigma (no pipeline stages)
 	LogicalOp         string   // "AND" or "OR" connecting to previous condition

@@ -81,12 +81,14 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 	result.Errors = append(result.Errors, errs...)
 
 	// Phase 3: Parse condition expression
-	ast, aggExprs, multipleConditions, conditionErrs := parseDetectionCondition(rule.Detection["condition"])
+	condition, _ := rule.Detection.get("condition")
+	ast, aggExprs, multipleConditions, conditionErrs := parseDetectionCondition(condition)
 	result.Errors = append(result.Errors, conditionErrs...)
 	if ast == nil {
 		result.Errors = append(result.Errors, "empty condition expression")
 		return result
 	}
+	result.Errors = append(result.Errors, conditionReferenceErrors(ast, items)...)
 	result.Expression = buildExpression(ast, items)
 	result.Errors = append(result.Errors, validateExpression(result.Expression)...)
 
@@ -95,7 +97,7 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 
 	// Phase 4b: Parse aggregation if present
 	timeframe := ""
-	if tf, ok := rule.Detection["timeframe"]; ok {
+	if tf, ok := rule.Detection.get("timeframe"); ok {
 		timeframe = fmt.Sprintf("%v", tf)
 	}
 	result.Timeframe = timeframe

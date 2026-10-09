@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -172,12 +173,11 @@ func (p *conditionParser) parseAtom() condNode {
 
 	case tokIdent:
 		p.advance()
-		// Check for "of" — handles "selection of them" (1 of pattern == any)
-		if p.peek().typ == tokOf {
-			// Treat identifier as quantifier (e.g., "selection" is just a ref, not quantifier)
-			// Only valid quantifiers are numbers and "all"
-			// Revert: this is a regular identifier
-			return condNodeRef{name: t.val}
+		// "any of" is the same selector as "1 of"; any other word before "of"
+		// is an identifier, and the dangling "of" fails the parse.
+		if strings.EqualFold(t.val, "any") && p.peek().typ == tokOf {
+			p.advance()
+			return condNodeQuantifier{quantifier: "1", pattern: p.parsePattern()}
 		}
 		return condNodeRef{name: t.val}
 
@@ -318,38 +318,63 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 // for determinism. Without the sort, map iteration order made quantifier
 // evaluation ("N of selection_*", "all of them") non-deterministic, which
 // could reorder — and in turn drop — extracted conditions across runs.
+//
+// Per the Sigma specification, `*` matches any characters at any position,
+// and identifiers starting with `_` are excluded unless the pattern itself
+// starts with `_`.
 func matchDetectionItems(pattern string, items map[string]*detectionItem) []string {
+	matcher := selectorPattern(pattern)
 	var names []string
-	if pattern == "them" || pattern == "*" {
-		// Match all detection items
-		names = make([]string, 0, len(items))
-		for name := range items {
-			names = append(names, name)
+	for name := range items {
+		if strings.HasPrefix(name, "_") && !strings.HasPrefix(pattern, "_") {
+			continue
 		}
-	} else {
-		// Glob matching with * wildcard
-		for name := range items {
-			if globMatch(pattern, name) {
-				names = append(names, name)
-			}
+		if matcher.MatchString(name) {
+			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
 	return names
 }
 
-// globMatch performs simple glob matching (only * wildcard at end/start).
-func globMatch(pattern, s string) bool {
-	if pattern == s {
-		return true
+func selectorPattern(pattern string) *regexp.Regexp {
+	if pattern == "them" {
+		pattern = "*"
 	}
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
-		return strings.HasPrefix(s, prefix)
+	parts := strings.Split(pattern, "*")
+	for i, part := range parts {
+		parts[i] = regexp.QuoteMeta(part)
 	}
-	if strings.HasPrefix(pattern, "*") {
-		suffix := strings.TrimPrefix(pattern, "*")
-		return strings.HasSuffix(s, suffix)
+	return regexp.MustCompile("^" + strings.Join(parts, ".*") + "$")
+}
+
+// conditionReferenceErrors reports identifiers and selectors in a condition
+// that match no search identifier. Sigma rejects such rules; dropping the
+// reference would silently change what the rule matches.
+func conditionReferenceErrors(node condNode, items map[string]*detectionItem) []string {
+	switch n := node.(type) {
+	case condNodeRef:
+		if _, ok := items[n.name]; !ok && n.name != "" {
+			return []string{fmt.Sprintf("condition references undefined search identifier %q", n.name)}
+		}
+	case condNodeQuantifier:
+		if len(matchDetectionItems(n.pattern, items)) == 0 {
+			return []string{fmt.Sprintf("condition selector %q of %q matches no search identifier", n.quantifier, n.pattern)}
+		}
+	case condNodeNot:
+		return conditionReferenceErrors(n.child, items)
+	case condNodeAnd:
+		return childReferenceErrors(n.children, items)
+	case condNodeOr:
+		return childReferenceErrors(n.children, items)
 	}
-	return false
+	return nil
+}
+
+func childReferenceErrors(children []condNode, items map[string]*detectionItem) []string {
+	var errs []string
+	for _, child := range children {
+		errs = append(errs, conditionReferenceErrors(child, items)...)
+	}
+	return errs
 }

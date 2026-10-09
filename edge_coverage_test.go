@@ -84,9 +84,13 @@ func TestConditionParserCanonicalOfQuantifiers(t *testing.T) {
 }
 
 func TestEvaluateAndExpressionFallbackEdges(t *testing.T) {
+	item := func(name string, condition Condition) *detectionItem {
+		return &detectionItem{name: name, expr: leafExpression(condition), conditions: []Condition{condition}}
+	}
 	items := map[string]*detectionItem{
-		"sel_one": {conditions: []Condition{{Field: "Image", Operator: "=", Value: "a"}}},
-		"sel_two": {conditions: []Condition{{Field: "CommandLine", Operator: "contains", Value: "b"}}},
+		"sel_one": item("sel_one", Condition{Field: "Image", Operator: "=", Value: "a"}),
+		"sel_two": item("sel_two", Condition{Field: "CommandLine", Operator: "contains", Value: "b"}),
+		"_hidden": item("_hidden", Condition{Field: "User", Operator: "=", Value: "c"}),
 	}
 	if got := evaluateAST(condNodeQuantifier{quantifier: "1", pattern: "missing_*"}, items, false); got != nil {
 		t.Fatalf("expected no matches for missing quantifier, got %+v", got)
@@ -102,11 +106,19 @@ func TestEvaluateAndExpressionFallbackEdges(t *testing.T) {
 		t.Fatalf("expected negated all-of conditions joined by OR, got %+v", negated)
 	}
 
-	if !globMatch("*two", "sel_two") || globMatch("*two", "sel_one") || globMatch("sel_*", "other") {
-		t.Fatal("glob matching did not preserve prefix/suffix semantics")
-	}
-	if !globMatch("sel_one", "sel_one") || globMatch("sel_one", "sel_two") {
-		t.Fatal("exact glob matching did not preserve equality semantics")
+	// Selector patterns match * anywhere and skip _ identifiers unless the
+	// pattern itself starts with _ (Sigma rules specification, Condition).
+	for pattern, want := range map[string][]string{
+		"*two":  {"sel_two"},
+		"sel_*": {"sel_one", "sel_two"},
+		"s*_o*": {"sel_one"},
+		"them":  {"sel_one", "sel_two"},
+		"_*":    {"_hidden"},
+		"other": nil,
+	} {
+		if got := matchDetectionItems(pattern, items); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("pattern %q matched %v, want %v", pattern, got, want)
+		}
 	}
 
 	if expr := buildExpression(condNodeRef{name: "missing"}, items); expr != nil {
@@ -115,9 +127,7 @@ func TestEvaluateAndExpressionFallbackEdges(t *testing.T) {
 	if expr := buildExpression(condNodeQuantifier{quantifier: "many", pattern: "sel_*"}, items); expr == nil || expr.Kind != ExpressionOr {
 		t.Fatalf("invalid quantifier should degrade to OR expression, got %#v", expr)
 	}
-	emptyItems := map[string]*detectionItem{
-		"empty": {conditions: nil},
-	}
+	emptyItems := map[string]*detectionItem{"empty": {name: "empty"}}
 	if expr := buildExpression(condNodeQuantifier{quantifier: "1", pattern: "empty"}, emptyItems); expr != nil {
 		t.Fatalf("quantifier over empty selections should be nil, got %#v", expr)
 	}
@@ -127,15 +137,8 @@ func TestEvaluateAndExpressionFallbackEdges(t *testing.T) {
 	if expr := buildExpression(nil, items); expr != nil {
 		t.Fatalf("unknown expression node should be nil, got %#v", expr)
 	}
-	if expr := expressionFromConditions(nil); expr != nil {
-		t.Fatalf("empty condition expression should be nil, got %#v", expr)
-	}
-	expr := expressionFromConditions([]Condition{
-		{Field: "Image", Operator: "=", Value: "cmd.exe"},
-		{Field: "CommandLine", Operator: "contains", Value: "whoami", LogicalOp: "OR"},
-	})
-	if expr == nil || expr.Kind != ExpressionOr || len(expr.Children) != 2 {
-		t.Fatalf("expected OR expression from condition logical op, got %#v", expr)
+	if errs := conditionReferenceErrors(condNodeAnd{children: []condNode{condNodeRef{name: "missing"}, condNodeQuantifier{quantifier: "1", pattern: "filter_*"}}}, items); len(errs) != 2 {
+		t.Fatalf("expected undefined reference and empty selector errors, got %v", errs)
 	}
 	if expr := compactExpression(ExpressionAnd, nil); expr != nil {
 		t.Fatalf("empty compact expression should be nil, got %#v", expr)
@@ -165,95 +168,67 @@ func TestDetectionConditionParsingEdges(t *testing.T) {
 }
 
 func TestDetectionResolutionEdgeBranches(t *testing.T) {
-	item, errs := resolveDetectionEntry("bad", 123)
-	if item == nil || item.name != "bad" || len(errs) == 0 {
-		t.Fatalf("expected unsupported detection entry diagnostic, item=%#v errors=%v", item, errs)
+	if item, errs := resolveDetectionEntry("empty", nil); item == nil || item.name != "empty" || len(errs) == 0 {
+		t.Fatalf("expected empty detection diagnostic, item=%#v errors=%v", item, errs)
+	}
+	// A plain value searches the whole event, as a keyword.
+	item, errs := resolveDetectionEntry("plain", 4688)
+	if len(errs) != 0 || !item.isKeyword || len(item.conditions) != 1 || item.conditions[0].Operator != "keyword" || item.conditions[0].Value != "4688" {
+		t.Fatalf("plain value should be a keyword, item=%+v errors=%v", item, errs)
 	}
 
-	conds, isKeyword, errs := resolveList(nil)
-	if conds != nil || isKeyword || len(errs) != 0 {
-		t.Fatalf("empty list should be non-keyword empty, conds=%v keyword=%v errors=%v", conds, isKeyword, errs)
+	if expr, isKeyword, errs := resolveList(nil); expr != nil || isKeyword || len(errs) != 0 {
+		t.Fatalf("empty list should be non-keyword empty, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
+	}
+	expr, isKeyword, errs := resolveList([]any{orderedMap{{key: "Image", value: "cmd.exe"}}, "not-a-map"})
+	if len(expressionLeaves(expr)) != 1 || isKeyword || len(errs) == 0 {
+		t.Fatalf("mixed map list should preserve valid maps and report invalid item, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
+	}
+	expr, isKeyword, errs = resolveList([]any{"mimikatz", "sekurlsa"})
+	if len(errs) != 0 || !isKeyword || len(expressionLeaves(expr)) != 1 || len(expressionLeaves(expr)[0].Alternatives) != 2 {
+		t.Fatalf("keyword list should be one keyword condition with alternatives, expr=%#v errors=%v", expr, errs)
 	}
 
-	conds, isKeyword, errs = resolveList([]any{map[string]any{"Image": "cmd.exe"}, "not-a-map"})
-	if len(conds) != 1 || isKeyword || len(errs) == 0 {
-		t.Fatalf("mixed map list should preserve valid maps and report invalid item, conds=%+v keyword=%v errors=%v", conds, isKeyword, errs)
+	for value, want := range map[any]string{int64(42): "42", 7: "7", 2.0: "2", 1.5: "1.5", true: "true", false: "false"} {
+		leaves := expressionLeaves(mustFieldExpression(t, "Field", value))
+		if len(leaves) != 1 || leaves[0].Value != want {
+			t.Fatalf("value %#v should match as %q, got %+v", value, want, leaves)
+		}
+	}
+	if values := conditionValues(expressionLeaves(mustFieldExpression(t, "Field", []any{"a", 2, true}))[0]); strings.Join(values, ",") != "a,2,true" {
+		t.Fatalf("expected mixed list values, got %v", values)
 	}
 
-	conds, isKeyword, errs = resolveKeywordList(nil)
-	if conds != nil || !isKeyword || len(errs) != 0 {
-		t.Fatalf("empty keyword list should stay keyword metadata, conds=%v keyword=%v errors=%v", conds, isKeyword, errs)
+	mapExpr, _, errs := resolveFieldMap(orderedMap{{key: "A", value: "1"}, {key: "B", value: "2"}})
+	if len(errs) != 0 || mapExpr.Kind != ExpressionAnd || len(mapExpr.Children) != 2 || mapExpr.Children[0].Condition.Field != "A" {
+		t.Fatalf("expected map fields ANDed in authored order, expr=%#v errors=%v", mapExpr, errs)
 	}
-
-	if values, isNull := coerceToStringSlice(int64(42)); isNull || values[0] != "42" {
-		t.Fatalf("expected int64 coercion, got values=%v null=%v", values, isNull)
+	if leaves := expressionLeaves(mustFieldExpression(t, "Field|exists", []any{})); len(leaves) != 1 || leaves[0].Operator != "exists" || leaves[0].Value != "false" {
+		t.Fatalf("empty exists modifier list should coerce like null, got %+v", leaves)
 	}
-	if values, isNull := coerceToStringSlice(7); isNull || values[0] != "7" {
-		t.Fatalf("expected int coercion, got values=%v null=%v", values, isNull)
+	if leaves := expressionLeaves(mustFieldExpression(t, "Field|exists", []any{"no"})); len(leaves) != 1 || leaves[0].Value != "false" {
+		t.Fatalf("exists no should become false, got %+v", leaves)
 	}
-	if values, isNull := coerceToStringSlice(2.0); isNull || values[0] != "2" {
-		t.Fatalf("expected integer float coercion, got values=%v null=%v", values, isNull)
-	}
-	if values, isNull := coerceToStringSlice(1.5); isNull || values[0] != "1.5" {
-		t.Fatalf("expected float coercion, got values=%v null=%v", values, isNull)
-	}
-	if values, isNull := coerceToStringSlice(true); isNull || values[0] != "true" {
-		t.Fatalf("expected true coercion, got values=%v null=%v", values, isNull)
-	}
-	if values, isNull := coerceToStringSlice(false); isNull || values[0] != "false" {
-		t.Fatalf("expected bool coercion, got values=%v null=%v", values, isNull)
-	}
-	if values, isNull := coerceToStringSlice([]any{"a", 2, true}); isNull || strings.Join(values, ",") != "a,2,true" {
-		t.Fatalf("expected mixed list coercion, got values=%v null=%v", values, isNull)
-	}
-	if values, isNull := coerceToStringSlice(struct{ Name string }{"x"}); isNull || values[0] != "{x}" {
-		t.Fatalf("expected default coercion, got values=%v null=%v", values, isNull)
-	}
-	if values, isNull := coerceToStringSlice([]any{nil}); !isNull || values != nil {
-		t.Fatalf("all-null list should coerce to null, got values=%v null=%v", values, isNull)
-	}
-
-	fieldConds, errs := resolveFieldMap(map[string]any{
-		"A": "1",
-		"B": "2",
-	})
-	if len(errs) != 0 || len(fieldConds) != 2 || fieldConds[1].LogicalOp != "AND" {
-		t.Fatalf("expected map fields joined by AND, conds=%+v errors=%v", fieldConds, errs)
-	}
-	conds, errs = resolveFieldValue("Field|exists", []any{})
-	if len(errs) != 0 || len(conds) != 1 || conds[0].Operator != "exists" || conds[0].Value != "false" {
-		t.Fatalf("empty exists modifier list should coerce like null, conds=%+v errors=%v", conds, errs)
-	}
-	conds, errs = resolveFieldValue("Field|exists", []any{"no"})
-	if len(errs) != 0 || len(conds) != 1 || conds[0].Value != "false" {
-		t.Fatalf("exists no should become false, conds=%+v errors=%v", conds, errs)
-	}
-	conds, errs = resolveFieldValue("Field", "*")
-	if len(errs) != 0 || len(conds) != 1 || conds[0].Operator != "exists" || conds[0].Value != "true" {
-		t.Fatalf("bare wildcard should become exists true, conds=%+v errors=%v", conds, errs)
-	}
-	conds, errs = resolveFieldValue("Field|unknown", "value")
-	if len(conds) != 0 || len(errs) == 0 {
-		t.Fatalf("unsupported modifier should return diagnostics, conds=%+v errors=%v", conds, errs)
+	if _, _, errs := fieldExpression("Field|unknown", "value"); len(errs) == 0 {
+		t.Fatal("unsupported modifier should return diagnostics")
 	}
 }
 
 func TestModifierDiagnosticAndEncodingEdges(t *testing.T) {
-	_, utf16Result := parseModifiers("CommandLine|utf16", []string{"A"})
-	if len(utf16Result.values) != 1 || utf16Result.values[0] != "\xff\xfeA\x00" {
-		t.Fatalf("expected UTF-16 with BOM, got %v", []byte(utf16Result.values[0]))
+	if leaves := expressionLeaves(mustFieldExpression(t, "CommandLine|utf16", "A")); leaves[0].Value != "\xff\xfeA\x00" {
+		t.Fatalf("expected UTF-16 with BOM, got %v", []byte(leaves[0].Value))
 	}
-
-	for _, field := range []string{"CommandLine|i", "CommandLine|re|m", "CommandLine|re|s", "CommandLine|unknown"} {
-		_, result := parseModifiers(field, []string{"value"})
-		if len(result.errors) == 0 {
+	for _, field := range []string{"CommandLine|i", "CommandLine|unknown"} {
+		if _, _, errs := fieldExpression(field, "value"); len(errs) == 0 {
 			t.Fatalf("expected modifier diagnostic for %s", field)
 		}
 	}
-
-	conds, errs := resolveFieldValue("Field|fieldref", []any{"A", "B"})
-	if len(conds) != 0 || len(errs) == 0 {
-		t.Fatalf("expected fieldref multi-value diagnostic, conds=%+v errors=%v", conds, errs)
+	// The regex m and s flags and multi-value field references are valid
+	// Sigma (modifiers appendix v2.1.0).
+	for field, value := range map[string]any{"CommandLine|re|m": "^a", "CommandLine|re|s": "a.b", "Field|fieldref": []any{"A", "B"}} {
+		if _, _, errs := fieldExpression(field, value); len(errs) != 0 {
+			t.Fatalf("%s should be valid, got %v", field, errs)
+		}
 	}
 }
 

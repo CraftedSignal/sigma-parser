@@ -102,7 +102,8 @@ func enrichSemanticQueryFromYAML(semantic *SemanticQuery, ruleYAML string) {
 	}
 	items, _ := resolveDetectionItems(rule.Detection)
 	semantic.Detections = semanticDetectionsFromItems(items)
-	node, aggregations, multipleConditions, _ := parseDetectionCondition(rule.Detection["condition"])
+	condition, _ := rule.Detection.get("condition")
+	node, aggregations, multipleConditions, _ := parseDetectionCondition(condition)
 	semantic.ConditionExpression = semanticConditionExpressionFromCondNode(node)
 	semantic.Aggregations = cloneSemanticStrings(aggregations)
 	semantic.MultipleConditionStrings = multipleConditions

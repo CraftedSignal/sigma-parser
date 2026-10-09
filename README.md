@@ -9,7 +9,7 @@ A production-ready Go parser for [Sigma](https://sigmahq.io/) detection rules. E
 ## Features
 
 - **Full Detection Resolution**: Maps, lists, keyword lists, null values, wildcards
-- **All 18 Sigma Modifiers**: contains, startswith, endswith, re, cidr, base64, base64offset, wide/utf16, windash, all, exists, fieldref, gt/gte/lt/lte, expand
+- **Every Sigma Modifier** (modifiers appendix v2.1.0): contains, startswith, endswith, all, exists, cased, neq, windash, re with i/m/s, base64, base64offset, utf16le/wide, utf16be, utf16, gt/gte/lt/lte, minute/hour/day/week/month/year, cidr, expand, fieldref
 - **Condition Parser**: Recursive descent for AND/OR/NOT, parentheses, quantifiers (`all of them`, `1 of selection_*`)
 - **Full Aggregation Support**: count/sum/min/max/avg with group-by and comparison operators, near with timeframe
 - **3,100+ Rule Corpus**: Tested against the entire SigmaHQ rule repository
@@ -102,13 +102,13 @@ fmt.Println(result.Commands)      // [count]
 | List of maps (OR) | Supported |
 | Keyword lists | Supported |
 | Null values | Supported |
-| Wildcards (*,?) | Supported |
-| All 18 modifiers | Supported |
+| Wildcards (*, ?) and \ escapes | Supported; values reach Condition as literals or, for inner wildcards, regexes |
+| All modifiers, v2.1.0 | Supported, with pySigma's chaining rules |
 | Condition expressions | Supported |
-| Quantifiers (1 of, all of) | Supported |
+| Quantifiers (1 of, any of, all of) | Supported; `*` anywhere in patterns, `_` identifiers excluded |
 | Threshold quantifiers (N of) | Extension; `N of selection` on one named selection counts its values |
 | Aggregation (count/sum/min/max/avg) | Supported |
-| Near aggregation | Supported |
+| Near aggregation | Parsed |
 | Timeframe | Supported |
 | LogSource metadata | Supported |
 | Tags (MITRE ATT&CK) | Supported |
