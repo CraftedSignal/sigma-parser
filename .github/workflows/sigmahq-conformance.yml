@@ -11,9 +11,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: conformance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   parser-conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -23,7 +28,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version-file: go.mod
+          go-version: '1.26.11'
           cache: true
       - name: Run parser and SigmaHQ conformance tests
         env:
