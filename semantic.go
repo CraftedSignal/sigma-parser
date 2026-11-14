@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -68,62 +69,83 @@ type SemanticJoin struct {
 
 // AnalyzeQuery parses a Sigma rule and returns the parser-owned semantic model.
 func AnalyzeQuery(ruleYAML string) *SemanticQuery {
-	semantic := semanticFromExtraction(ExtractConditions(ruleYAML))
-	enrichSemanticQueryFromYAML(semantic, ruleYAML)
+	return AnalyzeQueryContext(context.Background(), ruleYAML)
+}
+
+// AnalyzeQueryContext shares one budget across extraction and enrichment.
+func AnalyzeQueryContext(ctx context.Context, ruleYAML string) *SemanticQuery {
+	return guarded(ctx, ruleYAML, func(b *parseBudget) *SemanticQuery {
+		return analyzeQuery(ruleYAML, b)
+	}, func(message string) *SemanticQuery {
+		return &SemanticQuery{Errors: []string{message}}
+	})
+}
+
+func analyzeQuery(ruleYAML string, b *parseBudget) *SemanticQuery {
+	semantic := semanticFromExtraction(extractConditionsInternal(ruleYAML, b), b)
+	enrichSemanticQueryFromYAML(semantic, ruleYAML, b)
 	return semantic
 }
 
 // semanticFromExtraction normalizes parser extraction output into the
 // parser-owned semantic model.
-func semanticFromExtraction(result *ParseResult) *SemanticQuery {
+func semanticFromExtraction(result *ParseResult, budgets ...*parseBudget) *SemanticQuery {
+	b := budgetFrom(budgets)
 	if result == nil {
 		return nil
 	}
 	return &SemanticQuery{
-		Conditions:     cloneSemanticConditions(result.Conditions),
-		Expression:     semanticExpressionFromParseExpression(result.Expression),
-		GroupByFields:  cloneSemanticStrings(result.GroupByFields),
-		ComputedFields: cloneSemanticStringMap(result.ComputedFields),
-		Commands:       cloneSemanticStrings(result.Commands),
+		Conditions:     cloneSemanticConditions(result.Conditions, b),
+		Expression:     semanticExpressionFromParseExpression(result.Expression, b),
+		GroupByFields:  cloneSemanticStrings(result.GroupByFields, b),
+		ComputedFields: cloneSemanticStringMap(result.ComputedFields, b),
+		Commands:       cloneSemanticStrings(result.Commands, b),
 		Joins:          semanticJoinsFromParseJoins(result.Joins),
-		Errors:         cloneSemanticStrings(result.Errors),
+		Errors:         cloneSemanticStrings(result.Errors, b),
 		LogSource:      cloneSemanticLogSource(result.LogSource),
 		Level:          result.Level,
 		Status:         result.Status,
 		Title:          result.Title,
-		Tags:           cloneSemanticStrings(result.Tags),
+		Tags:           cloneSemanticStrings(result.Tags, b),
 		Timeframe:      result.Timeframe,
 	}
 }
 
-func enrichSemanticQueryFromYAML(semantic *SemanticQuery, ruleYAML string) {
+func enrichSemanticQueryFromYAML(semantic *SemanticQuery, ruleYAML string, budgets ...*parseBudget) {
+	b := budgetFrom(budgets)
 	defer func() {
-		_ = recover()
+		if recovered := recover(); recovered != nil {
+			if _, ok := recovered.(parseAbort); ok {
+				panic(recovered)
+			}
+		}
 	}()
-	rules, err := parseSigmaRules(ruleYAML)
+	rules, err := parseSigmaRules(ruleYAML, b)
 	if err != nil {
 		return
 	}
+	b.node(len(rules))
 	var conditions []*SemanticConditionExpression
 	for i, rule := range rules {
-		items, _ := resolveDetectionItems(rule.Detection)
-		detections := semanticDetectionsFromItems(items)
+		b.step(1)
+		items, _ := resolveDetectionItems(rule.Detection, b)
+		detections := semanticDetectionsFromItems(items, b)
 		condition, _ := rule.Detection.get("condition")
-		node, aggregations, multipleConditions, _ := parseDetectionCondition(condition)
-		expression := semanticConditionExpressionFromCondNode(node)
+		node, aggregations, multipleConditions, _ := parseDetectionCondition(condition, b)
+		expression := semanticConditionExpressionFromCondNode(node, b)
 		if len(rules) > 1 {
-			// Namespace the descriptive condition model only after parsing each
-			// rule. Keep private names private so wildcard semantics survive.
 			prefix := fmt.Sprintf("rule%d_", i+1)
 			for j := range detections {
-				detections[j].Name = scopedDetectionName(detections[j].Name, prefix)
+				detections[j].Name = scopedDetectionName(detections[j].Name, prefix, b)
 			}
-			scopeSemanticCondition(expression, prefix)
+			scopeSemanticCondition(expression, prefix, b)
 		}
+		b.node(len(detections))
 		semantic.Detections = append(semantic.Detections, detections...)
 		if expression != nil {
 			conditions = append(conditions, expression)
 		}
+		b.stringsOutput(aggregations)
 		semantic.Aggregations = append(semantic.Aggregations, aggregations...)
 		semantic.MultipleConditionStrings = semantic.MultipleConditionStrings || multipleConditions
 	}
@@ -132,12 +154,17 @@ func enrichSemanticQueryFromYAML(semantic *SemanticQuery, ruleYAML string) {
 		semantic.ConditionExpression = conditions[0]
 	default:
 		if len(conditions) > 1 {
+			b.node(1)
 			semantic.ConditionExpression = &SemanticConditionExpression{Operator: "or", Children: conditions}
 		}
 	}
 }
 
-func semanticExpressionFromParseExpression(expression *Expression) *SemanticExpression {
+func semanticExpressionFromParseExpression(expression *Expression, budgets ...*parseBudget) *SemanticExpression {
+	b := budgetFrom(budgets)
+	b.step(1)
+	b.node(1)
+	defer b.enter()()
 	if expression == nil {
 		return nil
 	}
@@ -146,34 +173,41 @@ func semanticExpressionFromParseExpression(expression *Expression) *SemanticExpr
 		Threshold: expression.Threshold,
 	}
 	if expression.Condition != nil {
+		b.copyCondition(*expression.Condition)
 		condition := cloneSemanticCondition(*expression.Condition)
 		semantic.Condition = &condition
 	}
 	for _, child := range expression.Children {
-		if converted := semanticExpressionFromParseExpression(child); converted != nil {
+		if converted := semanticExpressionFromParseExpression(child, b); converted != nil {
 			semantic.Children = append(semantic.Children, converted)
 		}
 	}
 	return semantic
 }
 
-func semanticConditionExpressionFromCondNode(node condNode) *SemanticConditionExpression {
+func semanticConditionExpressionFromCondNode(node condNode, budgets ...*parseBudget) *SemanticConditionExpression {
+	b := budgetFrom(budgets)
+	b.step(1)
+	b.node(1)
+	defer b.enter()()
 	switch n := node.(type) {
 	case nil:
 		return nil
 	case condNodeRef:
+		b.output(len(n.name))
 		return &SemanticConditionExpression{Operator: "ref", Selector: n.name}
 	case condNodeAnd:
-		return semanticConditionExpressionGroup("and", n.children)
+		return semanticConditionExpressionGroup("and", n.children, b)
 	case condNodeOr:
-		return semanticConditionExpressionGroup("or", n.children)
+		return semanticConditionExpressionGroup("or", n.children, b)
 	case condNodeNot:
-		child := semanticConditionExpressionFromCondNode(n.child)
+		child := semanticConditionExpressionFromCondNode(n.child, b)
 		if child == nil {
 			return nil
 		}
 		return &SemanticConditionExpression{Operator: "not", Children: []*SemanticConditionExpression{child}}
 	case condNodeQuantifier:
+		b.output(len(n.quantifier) + len(n.pattern))
 		return &SemanticConditionExpression{
 			Operator:   "quantifier",
 			Quantifier: n.quantifier,
@@ -184,10 +218,12 @@ func semanticConditionExpressionFromCondNode(node condNode) *SemanticConditionEx
 	}
 }
 
-func semanticConditionExpressionGroup(operator string, children []condNode) *SemanticConditionExpression {
+func semanticConditionExpressionGroup(operator string, children []condNode, budgets ...*parseBudget) *SemanticConditionExpression {
+	b := budgetFrom(budgets)
+	b.node(len(children))
 	semantic := &SemanticConditionExpression{Operator: operator}
 	for _, child := range children {
-		if converted := semanticConditionExpressionFromCondNode(child); converted != nil {
+		if converted := semanticConditionExpressionFromCondNode(child, b); converted != nil {
 			semantic.Children = append(semantic.Children, converted)
 		}
 	}
@@ -200,7 +236,9 @@ func semanticConditionExpressionGroup(operator string, children []condNode) *Sem
 	return semantic
 }
 
-func semanticDetectionsFromItems(items map[string]*detectionItem) []SemanticDetection {
+func semanticDetectionsFromItems(items map[string]*detectionItem, budgets ...*parseBudget) []SemanticDetection {
+	b := budgetFrom(budgets)
+	b.node(2 * len(items))
 	if len(items) == 0 {
 		return nil
 	}
@@ -211,13 +249,14 @@ func semanticDetectionsFromItems(items map[string]*detectionItem) []SemanticDete
 	sort.Strings(names)
 	out := make([]SemanticDetection, 0, len(names))
 	for _, name := range names {
+		b.step(1)
 		item := items[name]
 		if item == nil {
 			continue
 		}
 		out = append(out, SemanticDetection{
 			Name:       item.name,
-			Conditions: cloneSemanticConditions(item.conditions),
+			Conditions: cloneSemanticConditions(item.conditions, b),
 			Keyword:    item.isKeyword,
 		})
 	}
@@ -243,7 +282,9 @@ func semanticJoinsFromParseJoins(joins []JoinInfo) []SemanticJoin {
 	return out
 }
 
-func cloneSemanticConditions(conditions []Condition) []Condition {
+func cloneSemanticConditions(conditions []Condition, budgets ...*parseBudget) []Condition {
+	b := budgetFrom(budgets)
+	b.copyConditions(conditions)
 	if len(conditions) == 0 {
 		return nil
 	}
@@ -270,14 +311,22 @@ func cloneSemanticLogSource(logSource *LogSource) *LogSource {
 	}
 }
 
-func cloneSemanticStrings(values []string) []string {
+func cloneSemanticStrings(values []string, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.stringsOutput(values)
 	if len(values) == 0 {
 		return nil
 	}
 	return append([]string(nil), values...)
 }
 
-func cloneSemanticStringMap(values map[string]string) map[string]string {
+func cloneSemanticStringMap(values map[string]string, budgets ...*parseBudget) map[string]string {
+	b := budgetFrom(budgets)
+	b.node(len(values))
+	for key, value := range values {
+		b.step(1)
+		b.output(len(key) + len(value))
+	}
 	if len(values) == 0 {
 		return nil
 	}
@@ -288,30 +337,35 @@ func cloneSemanticStringMap(values map[string]string) map[string]string {
 	return out
 }
 
-// scopedDetectionName preserves the leading underscore used to mark private
-// selections, while keeping names from different collection rules distinct.
-func scopedDetectionName(name, prefix string) string {
+// scopedDetectionName preserves private selections while separating documents.
+func scopedDetectionName(name, prefix string, budgets ...*parseBudget) string {
+	b := budgetFrom(budgets)
+	b.step(len(name) + 1)
+	b.output(len(name) + len(prefix) + 1)
 	if strings.HasPrefix(name, "_") {
 		return "_" + prefix + strings.TrimPrefix(name, "_")
 	}
 	return prefix + name
 }
 
-func scopeSemanticCondition(expression *SemanticConditionExpression, prefix string) {
+func scopeSemanticCondition(expression *SemanticConditionExpression, prefix string, budgets ...*parseBudget) {
+	b := budgetFrom(budgets)
+	b.step(1)
+	defer b.enter()()
 	if expression == nil {
 		return
 	}
 	if expression.Operator == "ref" {
-		expression.Selector = scopedDetectionName(expression.Selector, prefix)
+		expression.Selector = scopedDetectionName(expression.Selector, prefix, b)
 	}
 	if expression.Operator == "quantifier" {
 		pattern := expression.Pattern
 		if pattern == "them" {
 			pattern = "*"
 		}
-		expression.Pattern = scopedDetectionName(pattern, prefix)
+		expression.Pattern = scopedDetectionName(pattern, prefix, b)
 	}
 	for _, child := range expression.Children {
-		scopeSemanticCondition(child, prefix)
+		scopeSemanticCondition(child, prefix, b)
 	}
 }

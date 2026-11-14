@@ -1,7 +1,6 @@
 package sigma
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -16,15 +15,18 @@ type detectionItem struct {
 
 // resolveDetectionItems resolves every search identifier of a detection block
 // (everything except "condition" and "timeframe").
-func resolveDetectionItems(detection orderedMap) (map[string]*detectionItem, []string) {
+func resolveDetectionItems(detection orderedMap, budgets ...*parseBudget) (map[string]*detectionItem, []string) {
+	b := budgetFrom(budgets)
+	b.node(len(detection))
 	items := make(map[string]*detectionItem)
 	var errors []string
 	for _, entry := range detection {
+		b.step(1)
 		lower := strings.ToLower(entry.key)
 		if lower == "condition" || lower == "timeframe" {
 			continue
 		}
-		item, errs := resolveDetectionEntry(entry.key, entry.value)
+		item, errs := resolveDetectionEntry(entry.key, entry.value, b)
 		items[entry.key] = item
 		errors = append(errors, errs...)
 	}
@@ -33,31 +35,36 @@ func resolveDetectionItems(detection orderedMap) (map[string]*detectionItem, []s
 
 // resolveDetectionEntry resolves one search identifier: a map of fields
 // (ANDed), a list of maps (ORed), or keywords (a list or a plain value).
-func resolveDetectionEntry(name string, raw any) (*detectionItem, []string) {
+func resolveDetectionEntry(name string, raw any, budgets ...*parseBudget) (*detectionItem, []string) {
+	b := budgetFrom(budgets)
+	b.step(1)
 	item := &detectionItem{name: name}
 	var errs []string
 	switch v := raw.(type) {
 	case orderedMap:
-		item.expr, item.units, errs = resolveFieldMap(v)
+		item.expr, item.units, errs = resolveFieldMap(v, b)
 	case []any:
-		item.expr, item.isKeyword, errs = resolveList(v)
+		item.expr, item.isKeyword, errs = resolveList(v, b)
 	case nil:
-		errs = []string{fmt.Sprintf("detection '%s' is empty", name)}
+		errs = []string{b.formatError("detection '%s' is empty", name)}
 	default:
 		item.isKeyword = true
-		item.expr, item.units, errs = fieldExpression("", raw)
+		item.expr, item.units, errs = fieldExpression("", raw, b)
 	}
-	item.conditions = flattenExpression(item.expr, false)
+	item.conditions = flattenExpression(item.expr, false, b)
 	return item, errs
 }
 
 // resolveFieldMap ANDs the fields of a map in their authored order.
-func resolveFieldMap(m orderedMap) (*Expression, []*Expression, []string) {
+func resolveFieldMap(m orderedMap, budgets ...*parseBudget) (*Expression, []*Expression, []string) {
+	b := budgetFrom(budgets)
+	b.node(len(m))
 	children := make([]*Expression, 0, len(m))
 	var units []*Expression
 	var errs []string
 	for _, entry := range m {
-		expr, fieldUnits, fieldErrs := fieldExpression(entry.key, entry.value)
+		b.step(1)
+		expr, fieldUnits, fieldErrs := fieldExpression(entry.key, entry.value, b)
 		errs = append(errs, fieldErrs...)
 		if expr != nil {
 			children = append(children, expr)
@@ -70,23 +77,26 @@ func resolveFieldMap(m orderedMap) (*Expression, []*Expression, []string) {
 }
 
 // resolveList resolves a list of maps (ORed) or a keyword list.
-func resolveList(list []any) (*Expression, bool, []string) {
+func resolveList(list []any, budgets ...*parseBudget) (*Expression, bool, []string) {
+	b := budgetFrom(budgets)
+	b.node(len(list))
 	if len(list) == 0 {
 		return nil, false, nil
 	}
 	if _, ok := list[0].(orderedMap); !ok {
-		expr, _, errs := fieldExpression("", list)
+		expr, _, errs := fieldExpression("", list, b)
 		return expr, true, errs
 	}
 	children := make([]*Expression, 0, len(list))
 	var errs []string
 	for _, element := range list {
+		b.step(1)
 		m, ok := element.(orderedMap)
 		if !ok {
-			errs = append(errs, fmt.Sprintf("expected map in list, got %T", element))
+			errs = append(errs, b.formatError("expected map in list, got %T", element))
 			continue
 		}
-		expr, _, mapErrs := resolveFieldMap(m)
+		expr, _, mapErrs := resolveFieldMap(m, b)
 		errs = append(errs, mapErrs...)
 		if expr != nil {
 			children = append(children, expr)
@@ -115,7 +125,10 @@ func isNestedValue(raw any) bool {
 // flattenExpression lists an expression's conditions with the logical
 // operator linking each to the previous one, pushing negation down with De
 // Morgan's laws. Grouping is lost; Expression carries the exact logic.
-func flattenExpression(expression *Expression, negated bool) []Condition {
+func flattenExpression(expression *Expression, negated bool, budgets ...*parseBudget) []Condition {
+	b := budgetFrom(budgets)
+	b.step(1)
+	defer b.enter()()
 	if expression == nil {
 		return nil
 	}
@@ -125,6 +138,7 @@ func flattenExpression(expression *Expression, negated bool) []Condition {
 			return nil
 		}
 		condition := *expression.Condition
+		b.copyCondition(condition)
 		condition.LogicalOp = ""
 		if negated {
 			condition.Negated = !condition.Negated
@@ -133,7 +147,9 @@ func flattenExpression(expression *Expression, negated bool) []Condition {
 	case ExpressionNot:
 		var out []Condition
 		for _, child := range expression.Children {
-			out = append(out, flattenExpression(child, !negated)...)
+			conditions := flattenExpression(child, !negated, b)
+			b.node(len(conditions))
+			out = append(out, conditions...)
 		}
 		return out
 	}
@@ -143,10 +159,11 @@ func flattenExpression(expression *Expression, negated bool) []Condition {
 	}
 	var out []Condition
 	for _, child := range expression.Children {
-		conditions := flattenExpression(child, negated)
+		conditions := flattenExpression(child, negated, b)
 		if len(out) > 0 && len(conditions) > 0 {
 			conditions[0].LogicalOp = operator
 		}
+		b.node(len(conditions))
 		out = append(out, conditions...)
 	}
 	return out

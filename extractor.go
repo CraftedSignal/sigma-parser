@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -13,58 +14,71 @@ var (
 // ExtractConditions parses a Sigma YAML rule and returns structured conditions.
 // This is the main entry point, matching the API of spl-parser and leql-parser.
 // A rule collection is extracted as the OR of its rules (see ExtractFile).
-// Includes 5-second timeout and panic recovery.
+// Includes cooperative cancellation, resource bounds, and panic recovery.
 func ExtractConditions(yamlContent string) *ParseResult {
-	return guarded(yamlContent, func() *ParseResult {
-		return extractConditionsInternal(yamlContent)
+	return ExtractConditionsContext(context.Background(), yamlContent)
+}
+
+// ExtractConditionsContext parses with caller cancellation and a cooperative
+// five-second deadline. It never leaves a parse worker running.
+func ExtractConditionsContext(ctx context.Context, yamlContent string) *ParseResult {
+	return guarded(ctx, yamlContent, func(b *parseBudget) *ParseResult {
+		return extractConditionsInternal(yamlContent, b)
 	}, func(message string) *ParseResult {
 		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{message}}
 	})
 }
 
-// guarded runs an extraction with the parse timeout and panic recovery,
-// reporting either through failed.
-func guarded[T any](yamlContent string, extract func() T, failed func(message string) T) T {
-	done := make(chan T, 1)
-	// A timed-out worker may start after the caller has restored the test
-	// hook. Capture it before launching rather than reading shared test state.
-	hook := extractHook
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				done <- failed(fmt.Sprintf("panic during parsing: %v", r))
-			}
-		}()
-		if hook != nil {
-			hook(yamlContent)
-		}
-		done <- extract()
-	}()
+func guarded[T any](ctx context.Context, input string, extract func(*parseBudget) T, failed func(string) T) T {
+	return guardedWithLimits(ctx, input, defaultParseLimits(), extract, failed)
+}
 
-	select {
-	case result := <-done:
-		return result
-	case <-time.After(maxParseTime):
-		return failed(fmt.Sprintf("parsing timed out after %s", maxParseTime))
+func guardedWithLimits[T any](ctx context.Context, input string, limits parseLimits, extract func(*parseBudget) T, failed func(string) T) (result T) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if abort, ok := recovered.(parseAbort); ok {
+				result = failed(abortMessage(abort.err))
+			} else {
+				result = failed(fmt.Sprintf("panic during parsing: %v", recovered))
+			}
+		}
+	}()
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	b := newParseBudget(ctx, limits)
+	b.input(input)
+	ctx, cancel := context.WithTimeout(ctx, maxParseTime)
+	defer cancel()
+	b.ctx = ctx
+	b.check()
+	if extractHook != nil {
+		extractHook(input)
+	}
+	b.check()
+	result = extract(b)
+	b.check()
+	return result
 }
 
 // extractConditionsInternal does the actual parsing work.
-func extractConditionsInternal(yamlContent string) *ParseResult {
-	rules, err := parseSigmaRules(yamlContent)
+func extractConditionsInternal(yamlContent string, budgets ...*parseBudget) *ParseResult {
+	b := budgetFrom(budgets)
+	b.input(yamlContent)
+	rules, err := parseSigmaRules(yamlContent, b)
 	if err != nil {
 		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}
 	}
-	result := extractRule(rules[0])
+	result := extractRule(rules[0], b)
 	if len(rules) == 1 {
 		return result
 	}
-	// Resolve each condition against its own detection block before ORing the
-	// expressions. A collection must never expand one rule's selector into
-	// another rule's selections (including private underscore selections).
+	// Resolve every selector inside its authored rule before combining results.
+	b.node(2 * len(rules))
 	expressions := []*Expression{result.Expression}
 	for _, rule := range rules[1:] {
-		next := extractRule(rule)
+		b.step(1)
+		next := extractRule(rule, b)
 		expressions = append(expressions, next.Expression)
 		if rule.LogSource != rules[0].LogSource {
 			result.LogSource = nil
@@ -72,6 +86,11 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 		if len(next.Conditions) > 0 {
 			next.Conditions[0].LogicalOp = "OR"
 		}
+		b.copyConditions(next.Conditions)
+		b.stringsOutput(next.GroupByFields)
+		b.stringsOutput(next.Commands)
+		b.stringsOutput(next.Errors)
+		b.stringsOutput(next.Warnings)
 		result.Conditions = append(result.Conditions, next.Conditions...)
 		result.GroupByFields = append(result.GroupByFields, next.GroupByFields...)
 		result.Commands = append(result.Commands, next.Commands...)
@@ -80,17 +99,20 @@ func extractConditionsInternal(yamlContent string) *ParseResult {
 	}
 	var children []*Expression
 	for _, expression := range expressions {
+		b.step(1)
 		if expression != nil {
 			children = append(children, expression)
 		}
 	}
 	result.Expression = compactExpression(ExpressionOr, children)
-	result.Conditions = deduplicateConditions(groupORConditions(result.Conditions))
+	result.Conditions = deduplicateConditions(groupORConditions(result.Conditions, b), b)
 	return result
 }
 
 // extractRule extracts the conditions of one parsed rule.
-func extractRule(rule *sigmaRule) *ParseResult {
+func extractRule(rule *sigmaRule, budgets ...*parseBudget) *ParseResult {
+	b := budgetFrom(budgets)
+	b.step(1)
 	result := &ParseResult{
 		ComputedFields: make(map[string]string),
 	}
@@ -111,65 +133,70 @@ func extractRule(rule *sigmaRule) *ParseResult {
 	}
 
 	// Phase 2: Resolve detection items
-	items, errs := resolveDetectionItems(rule.Detection)
+	items, errs := resolveDetectionItems(rule.Detection, b)
 	result.Errors = append(result.Errors, errs...)
 
 	// Phase 3: Parse condition expression
 	condition, _ := rule.Detection.get("condition")
-	ast, aggExprs, multipleConditions, conditionErrs := parseDetectionCondition(condition)
+	ast, aggExprs, multipleConditions, conditionErrs := parseDetectionCondition(condition, b)
 	result.Errors = append(result.Errors, conditionErrs...)
 	if ast == nil {
 		result.Errors = append(result.Errors, "empty condition expression")
 		return result
 	}
-	result.Errors = append(result.Errors, conditionReferenceErrors(ast, items)...)
-	result.Expression = buildExpression(ast, items)
-	result.Errors = append(result.Errors, validateExpression(result.Expression)...)
-	result.Warnings = commandLineWarnings(result.Expression)
+	result.Errors = append(result.Errors, conditionReferenceErrors(ast, items, b)...)
+	result.Expression = buildExpression(ast, items, b)
+	result.Errors = append(result.Errors, validateExpression(result.Expression, b)...)
+	result.Warnings = commandLineWarnings(result.Expression, b)
 
 	// Phase 4: Evaluate AST → conditions
-	conditions := evaluateAST(ast, items, false)
+	conditions := evaluateAST(ast, items, false, b)
 
 	// Phase 4b: Parse aggregation if present
 	timeframe := ""
 	if tf, ok := rule.Detection.get("timeframe"); ok {
-		timeframe = fmt.Sprintf("%v", tf)
+		timeframe = b.formatValue(tf)
 	}
 	result.Timeframe = timeframe
 	if multipleConditions && len(aggExprs) > 0 {
 		result.Errors = append(result.Errors, "multiple condition strings with aggregation cannot be represented losslessly")
 	}
 	for _, aggExpr := range aggExprs {
-		agg, aggErrs := parseAggregation(aggExpr, timeframe)
+		b.step(len(aggExpr) + 1)
+		agg, aggErrs := parseAggregation(aggExpr, timeframe, b)
 		result.Errors = append(result.Errors, aggErrs...)
 		if agg == nil {
 			continue
 		}
 		aggConds, groupBy, commands := agg.toConditions()
+		b.copyConditions(aggConds)
 		conditions = append(conditions, aggConds...)
 		result.GroupByFields = append(result.GroupByFields, groupBy...)
 		result.Commands = append(result.Commands, commands...)
 	}
 
 	// Phase 5: Post-process
-	conditions = groupORConditions(conditions)
-	conditions = deduplicateConditions(conditions)
+	conditions = groupORConditions(conditions, b)
+	conditions = deduplicateConditions(conditions, b)
 
 	result.Conditions = conditions
 	return result
 }
 
-func parseDetectionCondition(raw any) (condNode, []string, bool, []string) {
+func parseDetectionCondition(raw any, budgets ...*parseBudget) (condNode, []string, bool, []string) {
+	b := budgetFrom(budgets)
 	switch v := raw.(type) {
 	case string:
-		node, aggExpr, errs := parseConditionExpr(v)
+		node, aggExpr, errs := parseConditionExpr(v, b)
 		return node, nonEmptyAggExprs(aggExpr), false, errs
 	case []any:
+		b.node(len(v))
 		children := make([]condNode, 0, len(v))
 		var aggExprs []string
 		var errors []string
 		for _, item := range v {
-			node, aggExpr, errs := parseConditionExpr(fmt.Sprintf("%v", item))
+			b.step(1)
+			node, aggExpr, errs := parseConditionExpr(b.formatValue(item), b)
 			errors = append(errors, errs...)
 			if node != nil {
 				children = append(children, node)

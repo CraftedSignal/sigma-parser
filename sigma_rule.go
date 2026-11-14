@@ -34,21 +34,23 @@ type logSource struct {
 // attributes shared by the rules that follow, "action: reset" clears them,
 // and "action: repeat" repeats the previous rule with its keys changed.
 // Correlation documents are not detection rules and are skipped.
-func parseSigmaRules(yamlContent string) ([]*sigmaRule, error) {
-	documents, err := yamlDocuments(yamlContent)
+func parseSigmaRules(yamlContent string, budgets ...*parseBudget) ([]*sigmaRule, error) {
+	b := budgetFrom(budgets)
+	documents, err := yamlDocuments(yamlContent, b)
 	if err != nil {
 		return nil, fmt.Errorf("YAML parse error: %w", err)
 	}
-	documents, err = collectionDocuments(documents)
+	documents, err = collectionDocuments(documents, b)
 	if err != nil {
 		return nil, err
 	}
 	var rules []*sigmaRule
 	for _, document := range documents {
+		b.step(1)
 		if isCorrelationDocument(document) {
 			continue
 		}
-		rule, err := ruleFromDocument(document)
+		rule, err := ruleFromDocument(document, b)
 		if err != nil {
 			return nil, err
 		}
@@ -60,10 +62,13 @@ func parseSigmaRules(yamlContent string) ([]*sigmaRule, error) {
 	return rules, nil
 }
 
-func yamlDocuments(content string) ([]orderedMap, error) {
-	decoder := yaml.NewDecoder(strings.NewReader(content))
+func yamlDocuments(content string, budgets ...*parseBudget) ([]orderedMap, error) {
+	b := budgetFrom(budgets)
+	b.input(content)
+	decoder := yaml.NewDecoder(budgetReader{reader: strings.NewReader(content), budget: b})
 	var documents []orderedMap
 	for {
+		b.check()
 		var node yaml.Node
 		err := decoder.Decode(&node)
 		if errors.Is(err, io.EOF) {
@@ -72,7 +77,8 @@ func yamlDocuments(content string) ([]orderedMap, error) {
 		if err != nil {
 			return nil, err
 		}
-		value, err := decodeOrdered(&node)
+		b.take(&b.documents, 1, b.limits.documents, "documents")
+		value, err := decodeOrdered(&node, b)
 		if err != nil {
 			return nil, err
 		}
@@ -90,25 +96,27 @@ func yamlDocuments(content string) ([]orderedMap, error) {
 // collectionDocuments applies Sigma collection actions and returns the rule
 // and correlation documents, each merged with the global attributes in
 // effect.
-func collectionDocuments(documents []orderedMap) ([]orderedMap, error) {
+func collectionDocuments(documents []orderedMap, budgets ...*parseBudget) ([]orderedMap, error) {
+	b := budgetFrom(budgets)
 	var global, previous orderedMap
 	var rules []orderedMap
 	for _, document := range documents {
+		b.step(len(document) + 1)
 		action, _ := document.get("action")
 		body := document.without("action")
 		switch action {
 		case nil:
-			previous = mergeDocuments(global, body)
+			previous = mergeDocuments(global, body, b)
 			rules = append(rules, previous)
 		case "global":
-			global = mergeDocuments(global, body)
+			global = mergeDocuments(global, body, b)
 		case "reset":
 			global = nil
 		case "repeat":
 			if previous == nil {
 				return nil, fmt.Errorf("sigma collection repeats a rule before defining one")
 			}
-			previous = mergeDocuments(previous, body)
+			previous = mergeDocuments(previous, body, b)
 			rules = append(rules, previous)
 		default:
 			return nil, fmt.Errorf("unsupported sigma collection action %v", action)
@@ -118,22 +126,28 @@ func collectionDocuments(documents []orderedMap) ([]orderedMap, error) {
 }
 
 // mergeDocuments overlays update on base, merging nested mappings key by key.
-func mergeDocuments(base, update orderedMap) orderedMap {
+func mergeDocuments(base, update orderedMap, budgets ...*parseBudget) orderedMap {
+	b := budgetFrom(budgets)
+	defer b.enter()()
+	b.node(len(base))
 	out := append(orderedMap(nil), base...)
 	for _, entry := range update {
+		b.step(len(out) + 1)
+		b.node(len(out) + 1)
 		existing, found := out.get(entry.key)
 		baseMap, baseIsMap := existing.(orderedMap)
 		updateMap, updateIsMap := entry.value.(orderedMap)
 		value := entry.value
 		if found && baseIsMap && updateIsMap {
-			value = mergeDocuments(baseMap, updateMap)
+			value = mergeDocuments(baseMap, updateMap, b)
 		}
 		out = out.with(entry.key, value)
 	}
 	return out
 }
 
-func ruleFromDocument(document orderedMap) (*sigmaRule, error) {
+func ruleFromDocument(document orderedMap, budgets ...*parseBudget) (*sigmaRule, error) {
+	b := budgetFrom(budgets)
 	rule := &sigmaRule{}
 	if value, ok := document.get("detection"); ok {
 		rule.Detection, _ = value.(orderedMap)
@@ -144,27 +158,27 @@ func ruleFromDocument(document orderedMap) (*sigmaRule, error) {
 	if _, ok := rule.Detection.get("condition"); !ok {
 		return nil, fmt.Errorf("sigma rule missing 'detection.condition'")
 	}
-	rule.Title = documentString(document, "title")
-	rule.ID = documentString(document, "id")
-	rule.Name = documentString(document, "name")
-	rule.Status = documentString(document, "status")
-	rule.Level = documentString(document, "level")
-	rule.Tags = documentStrings(document, "tags")
+	rule.Title = documentString(document, "title", b)
+	rule.ID = documentString(document, "id", b)
+	rule.Name = documentString(document, "name", b)
+	rule.Status = documentString(document, "status", b)
+	rule.Level = documentString(document, "level", b)
+	rule.Tags = documentStrings(document, "tags", b)
 	if value, ok := document.get("logsource"); ok {
 		source, _ := value.(orderedMap)
 		rule.LogSource = logSource{
-			Category: documentString(source, "category"),
-			Product:  documentString(source, "product"),
-			Service:  documentString(source, "service"),
+			Category: documentString(source, "category", b),
+			Product:  documentString(source, "product", b),
+			Service:  documentString(source, "service", b),
 		}
 	}
 	return rule, nil
 }
 
-func documentString(document orderedMap, key string) string {
+func documentString(document orderedMap, key string, budgets ...*parseBudget) string {
 	value, ok := document.get(key)
 	if !ok || value == nil {
 		return ""
 	}
-	return fmt.Sprintf("%v", value)
+	return budgetFrom(budgets).formatValue(value)
 }

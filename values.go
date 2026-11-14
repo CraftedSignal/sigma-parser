@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // sigmaString is a Sigma detection string split into literal text and
@@ -100,19 +101,26 @@ var windashVariants = []rune{'-', '/', '–', '—', '―'}
 // windash expands every flag character that starts a word (a dash or slash
 // not preceded by a word character and followed by one, like pySigma's
 // \B[-/]\b) into each windash variant, returning all permutations.
-func windash(s sigmaString) []sigmaString {
+func windash(s sigmaString, budgets ...*parseBudget) []sigmaString {
+	b := budgetFrom(budgets)
 	out := []sigmaString{nil}
 	for _, part := range s {
+		b.step(1)
 		variants := []stringPart{part}
 		if part.wildcard == 0 {
 			variants = variants[:0]
-			for _, text := range windashTexts(part.text) {
+			for _, text := range windashTexts(part.text, b) {
 				variants = append(variants, stringPart{text: text})
 			}
 		}
-		next := make([]sigmaString, 0, len(out)*len(variants))
+		count := b.product(len(out), len(variants), b.limits.variants-b.variants, "variants")
+		b.variant(count)
+		b.node(count)
+		next := make([]sigmaString, 0, count)
 		for _, prefix := range out {
 			for _, variant := range variants {
+				b.step(len(prefix) + 1)
+				b.node(len(prefix) + 1)
 				next = append(next, append(append(sigmaString{}, prefix...), variant))
 			}
 		}
@@ -122,23 +130,41 @@ func windash(s sigmaString) []sigmaString {
 }
 
 // windashTexts returns every permutation of a literal text's flag characters.
-func windashTexts(text string) []string {
-	runes := []rune(text)
+func windashTexts(text string, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	// Append unchanged spans at once. Appending one rune to every growing
+	// prefix would itself be quadratic even when there is no flag expansion.
 	texts := []string{""}
-	for i, r := range runes {
-		if isWindashChar(r) && (i == 0 || !isWordRune(runes[i-1])) && i+1 < len(runes) && isWordRune(runes[i+1]) {
-			next := make([]string, 0, len(texts)*len(windashVariants))
+	start := 0
+	var previous rune
+	for index, r := range text {
+		b.step(1)
+		_, width := utf8.DecodeRuneInString(text[index:])
+		following, _ := utf8.DecodeRuneInString(text[index+width:])
+		if isWindashChar(r) && (index == 0 || !isWordRune(previous)) && index+width < len(text) && isWordRune(following) {
+			count := b.product(len(texts), len(windashVariants), b.limits.variants-b.variants, "variants")
+			b.variant(count)
+			b.node(count)
+			span := text[start:index]
+			next := make([]string, 0, count)
 			for _, prefix := range texts {
 				for _, variant := range windashVariants {
-					next = append(next, prefix+string(variant))
+					length := len(prefix) + len(span) + utf8.RuneLen(variant)
+					b.output(length)
+					b.step(length)
+					next = append(next, prefix+span+string(variant))
 				}
 			}
 			texts = next
-			continue
+			start = index + width
 		}
-		for j := range texts {
-			texts[j] += string(r)
-		}
+		previous = r
+	}
+	for i := range texts {
+		length := len(texts[i]) + len(text[start:])
+		b.output(length)
+		b.step(length)
+		texts[i] += text[start:]
 	}
 	return texts
 }

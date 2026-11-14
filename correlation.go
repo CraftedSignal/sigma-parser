@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -17,8 +18,14 @@ var correlationOperators = []string{"gt", "gte", "lt", "lte", "eq", "neq"}
 // Sigma correlation rules with the rules they reference, which may be
 // referenced by name or id. Includes the parse timeout and panic recovery.
 func ExtractFile(yamlContent string) *File {
-	return guarded(yamlContent, func() *File {
-		return extractFile(yamlContent)
+	return ExtractFileContext(context.Background(), yamlContent)
+}
+
+// ExtractFileContext shares resource bounds and cooperative cancellation
+// across the rules and correlations of a file.
+func ExtractFileContext(ctx context.Context, yamlContent string) *File {
+	return guarded(ctx, yamlContent, func(b *parseBudget) *File {
+		return extractFile(yamlContent, b)
 	}, func(message string) *File {
 		return &File{Errors: []string{message}}
 	})
@@ -39,31 +46,34 @@ func (n *fileNode) key() string {
 	return firstNonEmpty(n.correlation.Name, n.correlation.ID, n.correlation.Title)
 }
 
-func extractFile(yamlContent string) *File {
-	documents, err := yamlDocuments(yamlContent)
+func extractFile(yamlContent string, budgets ...*parseBudget) *File {
+	b := budgetFrom(budgets)
+	b.input(yamlContent)
+	documents, err := yamlDocuments(yamlContent, b)
 	if err != nil {
 		return &File{Errors: []string{fmt.Sprintf("YAML parse error: %v", err)}}
 	}
-	documents, err = collectionDocuments(documents)
+	documents, err = collectionDocuments(documents, b)
 	if err != nil {
 		return &File{Errors: []string{err.Error()}}
 	}
 	file := &File{}
 	var nodes []*fileNode
 	for _, document := range documents {
+		b.step(1)
 		if isCorrelationDocument(document) {
-			correlation, refs, errs := parseCorrelation(document)
+			correlation, refs, errs := parseCorrelation(document, b)
 			file.Errors = append(file.Errors, errs...)
 			nodes = append(nodes, &fileNode{correlation: correlation, refs: refs})
 			continue
 		}
-		rule, err := ruleFromDocument(document)
+		rule, err := ruleFromDocument(document, b)
 		if err != nil {
 			file.Errors = append(file.Errors, err.Error())
 			continue
 		}
-		result := extractRule(rule)
-		correlation, errs := nearCorrelation(rule, result)
+		result := extractRule(rule, b)
+		correlation, errs := nearCorrelation(rule, result, b)
 		file.Errors = append(file.Errors, errs...)
 		if correlation != nil {
 			nodes = append(nodes, &fileNode{correlation: correlation})
@@ -74,7 +84,7 @@ func extractFile(yamlContent string) *File {
 	if len(nodes) == 0 && len(file.Errors) == 0 {
 		file.Errors = append(file.Errors, "sigma rule missing 'detection' block")
 	}
-	file.Errors = append(file.Errors, resolveReferences(nodes)...)
+	file.Errors = append(file.Errors, resolveReferences(nodes, b)...)
 	if len(file.Errors) > 0 {
 		return file
 	}
@@ -111,15 +121,18 @@ func extractFile(yamlContent string) *File {
 			file.Errors = append(file.Errors, n.rule.Errors...)
 			continue
 		}
-		file.Errors = append(file.Errors, prefixed(n.key(), n.rule.Errors)...)
+		file.Errors = append(file.Errors, prefixed(n.key(), n.rule.Errors, b)...)
 	}
-	file.Warnings = fileWarnings(file.DetectionRules())
+	b.checkFileOutput(file)
+	file.Warnings = fileWarnings(file.DetectionRules(), b)
 	return file
 }
 
 // fileWarnings collects the warnings of a file's detection rules, naming the
 // rule when the file holds several.
-func fileWarnings(rules []*ParseResult) []string {
+func fileWarnings(rules []*ParseResult, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.node(len(rules))
 	keys := map[string]bool{}
 	for _, rule := range rules {
 		keys[firstNonEmpty(rule.Name, rule.ID, rule.Title)] = true
@@ -129,9 +142,11 @@ func fileWarnings(rules []*ParseResult) []string {
 	for _, rule := range rules {
 		ruleWarnings := rule.Warnings
 		if len(keys) > 1 {
-			ruleWarnings = prefixed(firstNonEmpty(rule.Name, rule.ID, rule.Title), ruleWarnings)
+			ruleWarnings = prefixed(firstNonEmpty(rule.Name, rule.ID, rule.Title), ruleWarnings, b)
 		}
 		for _, warning := range ruleWarnings {
+			b.step(1)
+			b.output(len(warning))
 			if !seen[warning] {
 				seen[warning] = true
 				warnings = append(warnings, warning)
@@ -145,13 +160,23 @@ func fileWarnings(rules []*ParseResult) []string {
 // match on their own and the rules its correlations reference.
 func (f *File) DetectionRules() []*ParseResult {
 	rules := append([]*ParseResult(nil), f.Rules...)
+	seenRules := make(map[*ParseResult]bool, len(rules))
+	for _, rule := range rules {
+		seenRules[rule] = true
+	}
+	seenCorrelations := map[*Correlation]bool{}
 	var collect func(c *Correlation)
 	collect = func(c *Correlation) {
+		if c == nil || seenCorrelations[c] {
+			return
+		}
+		seenCorrelations[c] = true
 		for _, ref := range c.Rules {
 			switch {
 			case ref.Correlation != nil:
 				collect(ref.Correlation)
-			case ref.Rule != nil && !slices.Contains(rules, ref.Rule):
+			case ref.Rule != nil && !seenRules[ref.Rule]:
+				seenRules[ref.Rule] = true
 				rules = append(rules, ref.Rule)
 			}
 		}
@@ -170,19 +195,20 @@ func isCorrelationDocument(document orderedMap) bool {
 
 // parseCorrelation reads a correlation document. It returns the correlation,
 // the names or ids of the rules it references, and what is wrong with it.
-func parseCorrelation(document orderedMap) (*Correlation, []string, []string) {
+func parseCorrelation(document orderedMap, budgets ...*parseBudget) (*Correlation, []string, []string) {
+	b := budgetFrom(budgets)
 	c := &Correlation{
-		Title:  documentString(document, "title"),
-		ID:     documentString(document, "id"),
-		Name:   documentString(document, "name"),
-		Level:  documentString(document, "level"),
-		Status: documentString(document, "status"),
-		Tags:   documentStrings(document, "tags"),
+		Title:  documentString(document, "title", b),
+		ID:     documentString(document, "id", b),
+		Name:   documentString(document, "name", b),
+		Level:  documentString(document, "level", b),
+		Status: documentString(document, "status", b),
+		Tags:   documentStrings(document, "tags", b),
 	}
 	label := firstNonEmpty(c.Name, c.ID, c.Title, "correlation")
 	var errs []string
 	fail := func(format string, args ...any) {
-		errs = append(errs, fmt.Sprintf("correlation %q: ", label)+fmt.Sprintf(format, args...))
+		errs = append(errs, b.formatError("correlation %q: ", label)+b.formatError(format, args...))
 	}
 	section, ok := mustGet(document, "correlation").(orderedMap)
 	if !ok {
@@ -190,7 +216,7 @@ func parseCorrelation(document orderedMap) (*Correlation, []string, []string) {
 		return c, nil, errs
 	}
 
-	c.Type = CorrelationType(documentString(section, "type"))
+	c.Type = CorrelationType(documentString(section, "type", b))
 	switch c.Type {
 	case CorrelationEventCount, CorrelationValueCount, CorrelationValueSum, CorrelationValueAvg,
 		CorrelationValuePercentile, CorrelationTemporal, CorrelationTemporalOrdered:
@@ -200,26 +226,27 @@ func parseCorrelation(document orderedMap) (*Correlation, []string, []string) {
 		fail("unknown type %q", c.Type)
 	}
 
-	refs := documentStrings(section, "rules")
+	refs := documentStrings(section, "rules", b)
 	if len(refs) == 0 {
 		fail("references no rules")
 	}
-	c.GroupBy = documentStrings(section, "group-by")
-	c.Timespan = documentString(section, "timespan")
+	c.GroupBy = documentStrings(section, "group-by", b)
+	c.Timespan = documentString(section, "timespan", b)
 	if !timespanRe.MatchString(c.Timespan) {
 		fail("timespan %q is not a number followed by s, m, h or d", c.Timespan)
 	}
 	c.Generate = documentBool(section, "generate") || documentBool(document, "generate")
 
-	c.Field = documentString(section, "field")
+	c.Field = documentString(section, "field", b)
 	if raw, ok := section.get("condition"); ok {
 		condition, isMap := raw.(orderedMap)
 		if !isMap {
 			fail("condition must be a mapping of comparisons")
 		}
 		for _, entry := range condition {
+			b.step(1)
 			if entry.key == "field" {
-				c.Field = fmt.Sprintf("%v", entry.value)
+				c.Field = b.formatValue(entry.value)
 				continue
 			}
 			if !slices.Contains(correlationOperators, entry.key) {
@@ -263,6 +290,7 @@ func parseCorrelation(document orderedMap) (*Correlation, []string, []string) {
 		}
 		c.Aliases = map[string]map[string]string{}
 		for _, alias := range aliases {
+			b.step(1)
 			fields, isMap := alias.value.(orderedMap)
 			if !isMap {
 				fail("alias %q must map rule names to fields", alias.key)
@@ -270,7 +298,8 @@ func parseCorrelation(document orderedMap) (*Correlation, []string, []string) {
 			}
 			c.Aliases[alias.key] = map[string]string{}
 			for _, field := range fields {
-				c.Aliases[alias.key][field.key] = fmt.Sprintf("%v", field.value)
+				b.step(1)
+				c.Aliases[alias.key][field.key] = b.formatValue(field.value)
 			}
 		}
 	}
@@ -279,29 +308,34 @@ func parseCorrelation(document orderedMap) (*Correlation, []string, []string) {
 
 // resolveReferences links each correlation to the rules and correlations it
 // references by name or id, and checks aliases and reference cycles.
-func resolveReferences(nodes []*fileNode) []string {
+func resolveReferences(nodes []*fileNode, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
 	var errs []string
 	// Rules of a Sigma 1.0 collection often share the id of their global
 	// document, so a key only has to be unique when a correlation uses it.
 	byKey := map[string][]*fileNode{}
 	for _, n := range nodes {
+		b.step(1)
 		for _, key := range n.keys() {
 			byKey[key] = append(byKey[key], n)
 		}
 	}
 	for _, n := range nodes {
+		b.step(1)
 		c := n.correlation
 		if c == nil {
 			continue
 		}
 		for _, ref := range n.refs {
+			b.step(1)
+			b.node(1)
 			targets := byKey[ref]
 			if len(targets) != 1 {
 				problem := "is not defined in this file"
 				if len(targets) > 1 {
 					problem = "names more than one rule"
 				}
-				errs = append(errs, fmt.Sprintf("correlation %q references rule %q, which %s", n.key(), ref, problem))
+				errs = append(errs, b.formatError("correlation %q references rule %q, which %s", n.key(), ref, problem))
 				continue
 			}
 			target := targets[0]
@@ -310,15 +344,16 @@ func resolveReferences(nodes []*fileNode) []string {
 		}
 		for alias, fields := range c.Aliases {
 			for rule := range fields {
+				b.step(len(c.Rules) + 1)
 				if !slices.ContainsFunc(c.Rules, func(r CorrelationRule) bool { return r.Name == rule }) {
-					errs = append(errs, fmt.Sprintf("correlation %q: alias %q maps rule %q, which the correlation does not reference", n.key(), alias, rule))
+					errs = append(errs, b.formatError("correlation %q: alias %q maps rule %q, which the correlation does not reference", n.key(), alias, rule))
 				}
 			}
 		}
 	}
 	for _, n := range nodes {
-		if n.correlation != nil && referencesItself(n.correlation, n.correlation, map[*Correlation]bool{}) {
-			errs = append(errs, fmt.Sprintf("correlation %q references itself", n.key()))
+		if n.correlation != nil && referencesItself(n.correlation, n.correlation, map[*Correlation]bool{}, b) {
+			errs = append(errs, b.formatError("correlation %q references itself", n.key()))
 		}
 	}
 	return errs
@@ -340,13 +375,16 @@ func (n *fileNode) keys() []string {
 	return keys
 }
 
-func referencesItself(root, c *Correlation, seen map[*Correlation]bool) bool {
+func referencesItself(root, c *Correlation, seen map[*Correlation]bool, budgets ...*parseBudget) bool {
+	b := budgetFrom(budgets)
+	b.step(1)
+	defer b.enter()()
 	if seen[c] {
 		return false
 	}
 	seen[c] = true
 	for _, ref := range c.Rules {
-		if ref.Correlation == root || (ref.Correlation != nil && referencesItself(root, ref.Correlation, seen)) {
+		if ref.Correlation == root || (ref.Correlation != nil && referencesItself(root, ref.Correlation, seen, b)) {
 			return true
 		}
 	}
@@ -359,7 +397,9 @@ func referencesItself(root, c *Correlation, seen map[*Correlation]bool) bool {
 // a search after "and not". Like other Sigma 1 aggregations, a rule without a
 // timeframe spans the query's time range. It returns nil for rules without
 // "near".
-func nearCorrelation(rule *sigmaRule, result *ParseResult) (*Correlation, []string) {
+func nearCorrelation(rule *sigmaRule, result *ParseResult, budgets ...*parseBudget) (*Correlation, []string) {
+	b := budgetFrom(budgets)
+	b.step(1)
 	condition, _ := rule.Detection.get("condition")
 	text, _ := condition.(string)
 	anchor, aggregation, found := strings.Cut(text, "|")
@@ -380,30 +420,34 @@ func nearCorrelation(rule *sigmaRule, result *ParseResult) (*Correlation, []stri
 	label := firstNonEmpty(rule.Name, rule.ID, rule.Title, "rule")
 	var errs []string
 	if c.Timespan != "" && !timespanRe.MatchString(c.Timespan) {
-		errs = append(errs, fmt.Sprintf("rule %q: near timeframe %q is not a number followed by s, m, h or d", label, c.Timespan))
+		errs = append(errs, b.formatError("rule %q: near timeframe %q is not a number followed by s, m, h or d", label, c.Timespan))
 	}
 
 	anchorName := "anchor"
 	for _, exists := rule.Detection.get(anchorName); exists; _, exists = rule.Detection.get(anchorName) {
+		b.step(len(rule.Detection) + 1)
 		anchorName = "_" + anchorName
 	}
-	main := extractRule(withCondition(rule, strings.TrimSpace(anchor)))
-	errs = append(errs, prefixed(label, main.Errors)...)
+	b.node(2 * len(rule.Detection))
+	main := extractRule(withCondition(rule, strings.TrimSpace(anchor)), b)
+	errs = append(errs, prefixed(label, main.Errors, b)...)
 	c.Rules = append(c.Rules, CorrelationRule{Name: anchorName, Rule: main})
 
-	for _, item := range splitOnAnd(strings.TrimSpace(aggregation[len("near"):])) {
+	for _, item := range splitOnAnd(strings.TrimSpace(aggregation[len("near"):]), b) {
+		b.step(1)
+		b.node(2 * len(rule.Detection))
 		name, absent := strings.CutPrefix(strings.TrimSpace(item), "not ")
 		name = strings.TrimSpace(name)
 		if _, defined := rule.Detection.get(name); !defined || name == "condition" || name == "timeframe" {
-			errs = append(errs, fmt.Sprintf("rule %q: near references %q, which is not a search identifier of the rule", label, item))
+			errs = append(errs, b.formatError("rule %q: near references %q, which is not a search identifier of the rule", label, item))
 			continue
 		}
-		search := extractRule(withCondition(rule, name))
-		errs = append(errs, prefixed(label, search.Errors)...)
+		search := extractRule(withCondition(rule, name), b)
+		errs = append(errs, prefixed(label, search.Errors, b)...)
 		c.Rules = append(c.Rules, CorrelationRule{Name: name, Rule: search, Absent: absent})
 	}
 	if len(c.Rules) < 2 {
-		errs = append(errs, fmt.Sprintf("rule %q: near needs at least one search", label))
+		errs = append(errs, b.formatError("rule %q: near needs at least one search", label))
 	}
 	return c, errs
 }
@@ -414,10 +458,12 @@ func withCondition(rule *sigmaRule, condition string) *sigmaRule {
 	return &copied
 }
 
-func prefixed(label string, errs []string) []string {
+func prefixed(label string, errs []string, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.node(len(errs))
 	out := make([]string, len(errs))
 	for i, err := range errs {
-		out[i] = fmt.Sprintf("rule %q: %s", label, err)
+		out[i] = b.formatError("rule %q: %s", label, err)
 	}
 	return out
 }
@@ -442,18 +488,20 @@ func mustGet(m orderedMap, key string) any {
 }
 
 // documentStrings reads a string or a list of strings.
-func documentStrings(m orderedMap, key string) []string {
+func documentStrings(m orderedMap, key string, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
 	switch value := mustGet(m, key).(type) {
 	case nil:
 		return nil
 	case []any:
+		b.node(len(value))
 		out := make([]string, 0, len(value))
 		for _, item := range value {
-			out = append(out, fmt.Sprintf("%v", item))
+			out = append(out, b.formatValue(item))
 		}
 		return out
 	default:
-		return []string{fmt.Sprintf("%v", value)}
+		return []string{b.formatValue(value)}
 	}
 }
 

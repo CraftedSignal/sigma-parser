@@ -15,11 +15,14 @@ var loginShellRe = regexp.MustCompile(`^-(?:[a-z]*sh|fish)$`)
 // parameter, such as CommandLine: -NoProfile. A value without a modifier
 // must equal the whole field, so such a value never matches a real command
 // line; the rule almost certainly meant CommandLine|contains.
-func commandLineWarnings(expression *Expression) []string {
+func commandLineWarnings(expression *Expression, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
 	var warnings []string
 	seen := map[string]bool{}
 	var walk func(*Expression)
 	walk = func(e *Expression) {
+		b.step(1)
+		defer b.enter()()
 		if e == nil {
 			return
 		}
@@ -31,11 +34,19 @@ func commandLineWarnings(expression *Expression) []string {
 			}
 			var parameters []string
 			for _, value := range values {
+				b.step(len(value) + 1)
 				if isCommandLineParameter(value) {
+					b.output(6*len(value) + 2)
 					parameters = append(parameters, strconv.Quote(value))
 				}
 			}
 			warning := ""
+			if len(parameters) > 0 {
+				b.output(5*len(c.Field) + 256)
+				for _, parameter := range parameters {
+					b.output(2 * len(parameter))
+				}
+			}
 			switch len(parameters) {
 			case 0:
 			case 1:

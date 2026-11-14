@@ -40,6 +40,7 @@ var valueTransforms = map[string]bool{
 
 // fieldSpec is a detection field with its modifier chain interpreted.
 type fieldSpec struct {
+	budget    *parseBudget
 	field     string
 	kind      valueKind
 	compare   string // ">", ">=", "<" or "<=" for kindCompare
@@ -60,12 +61,16 @@ type fieldSpec struct {
 // Sigma specification (appendix "Sigma Modifiers") and pySigma: re and cidr
 // only apply to unmodified values, regex flags need re, encodings and
 // windash need strings, numeric and date-part modifiers need plain values.
-func parseFieldSpec(fieldWithMods string) (fieldSpec, []string) {
+func parseFieldSpec(fieldWithMods string, budgets ...*parseBudget) (fieldSpec, []string) {
+	b := budgetFrom(budgets)
+	b.step(len(fieldWithMods) + 1)
+	b.node(strings.Count(fieldWithMods, "|") + 1)
 	parts := strings.Split(fieldWithMods, "|")
-	spec := fieldSpec{field: parts[0]}
+	spec := fieldSpec{field: parts[0], budget: b}
 	var errs []string
-	fail := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
+	fail := func(format string, args ...any) { errs = append(errs, b.formatError(format, args...)) }
 	for index, raw := range parts[1:] {
+		b.step(1)
 		modifier := strings.ToLower(raw)
 		if alias, ok := modifierAliases[modifier]; ok {
 			modifier = alias
@@ -151,8 +156,11 @@ func parseFieldSpec(fieldWithMods string) (fieldSpec, []string) {
 // themselves are ORed, or ANDed with the all modifier; neq negates the whole
 // entry. It also returns one expression per value for "N of" thresholds over
 // a single selection.
-func fieldExpression(fieldWithMods string, raw any) (*Expression, []*Expression, []string) {
-	spec, errs := parseFieldSpec(fieldWithMods)
+func fieldExpression(fieldWithMods string, raw any, budgets ...*parseBudget) (*Expression, []*Expression, []string) {
+	b := budgetFrom(budgets)
+	b.step(len(fieldWithMods) + 1)
+	spec, errs := parseFieldSpec(fieldWithMods, b)
+	spec.budget = b
 	if len(errs) > 0 {
 		return nil, nil, errs
 	}
@@ -160,11 +168,12 @@ func fieldExpression(fieldWithMods string, raw any) (*Expression, []*Expression,
 		if spec.field == "" {
 			return nil, nil, []string{"keyword list contains a nested mapping or list"}
 		}
-		return nil, nil, []string{fmt.Sprintf("field %q: nested mapping or list is not a valid Sigma value", spec.field)}
+		return nil, nil, []string{b.formatError("field %q: nested mapping or list is not a valid Sigma value", spec.field)}
 	}
 	values, isNull := fieldValues(raw)
 	if isNull {
 		leaf := Condition{Field: spec.field, Operator: "exists", Value: "false"}
+		b.copyCondition(leaf)
 		return negateIf(leafExpression(leaf), spec.negated), nil, nil
 	}
 
@@ -172,6 +181,7 @@ func fieldExpression(fieldWithMods string, raw any) (*Expression, []*Expression,
 	var leaves []Condition
 	seen := make(map[string]bool, len(values))
 	for _, value := range values {
+		b.step(1)
 		// A repeated value adds nothing to an OR or an AND.
 		if key := formatScalar(value); seen[key] {
 			continue
@@ -184,13 +194,13 @@ func fieldExpression(fieldWithMods string, raw any) (*Expression, []*Expression,
 			continue
 		}
 		leaves = append(leaves, valueLeaves...)
-		units = append(units, orExpression(valueLeaves))
+		units = append(units, orExpression(valueLeaves, b))
 	}
 	if len(errs) > 0 || len(units) == 0 {
 		return nil, nil, errs
 	}
 
-	expr := orExpression(leaves)
+	expr := orExpression(leaves, b)
 	if spec.allOf {
 		expr = compactExpression(ExpressionAnd, units)
 	}
@@ -212,12 +222,18 @@ func fieldValues(raw any) ([]any, bool) {
 
 // valueLeaves turns one detection value into the conditions it ORs. A null
 // inside a value list matches an absent field, as in pySigma.
-func (spec fieldSpec) valueLeaves(value any) ([]Condition, []string) {
+func (spec fieldSpec) valueLeaves(value any) (leaves []Condition, errs []string) {
+	b := budgetFrom([]*parseBudget{spec.budget})
+	b.step(1)
+	defer func() { b.copyConditions(leaves) }()
 	if value == nil {
 		return []Condition{{Field: spec.field, Operator: "exists", Value: "false"}}, nil
 	}
 	base := Condition{Field: spec.field, CaseSensitive: spec.cased, RequiresExpansion: spec.expand, DatePart: spec.datePart}
 	text := formatScalar(value)
+	b.step(len(text))
+	b.output(len(text))
+	b.node(strings.Count(text, "*") + strings.Count(text, "?") + 1)
 	switch spec.kind {
 	case kindRegex:
 		pattern := text
@@ -231,25 +247,25 @@ func (spec fieldSpec) valueLeaves(value any) ([]Condition, []string) {
 		return []Condition{base}, nil
 	case kindCIDR:
 		if _, _, err := net.ParseCIDR(text); err != nil && net.ParseIP(text) == nil {
-			return nil, []string{fmt.Sprintf("field %q: %q is not an IP network", spec.field, text)}
+			return nil, []string{b.formatError("field %q: %q is not an IP network", spec.field, text)}
 		}
 		base.Operator, base.Value = "cidrmatch", text
 		return []Condition{base}, nil
 	case kindCompare:
 		if !isNumber(value) {
-			return nil, []string{fmt.Sprintf("field %q: %s comparison needs a number, got %q", spec.field, spec.compare, text)}
+			return nil, []string{b.formatError("field %q: %s comparison needs a number, got %q", spec.field, spec.compare, text)}
 		}
 		base.Operator, base.Value = spec.compare, text
 		return []Condition{base}, nil
 	case kindExists:
 		exists, ok := parseBool(value)
 		if !ok {
-			return nil, []string{fmt.Sprintf("field %q: exists needs true or false, got %q", spec.field, text)}
+			return nil, []string{b.formatError("field %q: exists needs true or false, got %q", spec.field, text)}
 		}
 		return []Condition{{Field: spec.field, Operator: "exists", Value: strconv.FormatBool(exists)}}, nil
 	case kindFieldRef:
 		if text == "" {
-			return nil, []string{fmt.Sprintf("field %q: fieldref needs a field name", spec.field)}
+			return nil, []string{b.formatError("field %q: fieldref needs a field name", spec.field)}
 		}
 		base.Operator, base.Value, base.ValueReference = positionOperator(spec.openStart, spec.openEnd), text, text
 		if spec.compare != "" {
@@ -259,7 +275,7 @@ func (spec fieldSpec) valueLeaves(value any) ([]Condition, []string) {
 	}
 	if spec.datePart != "" {
 		if !isNumber(value) {
-			return nil, []string{fmt.Sprintf("field %q: %s needs a number, got %q", spec.field, spec.datePart, text)}
+			return nil, []string{b.formatError("field %q: %s needs a number, got %q", spec.field, spec.datePart, text)}
 		}
 		base.Operator, base.Value = "=", text
 		return []Condition{base}, nil
@@ -270,14 +286,24 @@ func (spec fieldSpec) valueLeaves(value any) ([]Condition, []string) {
 		variants = []sigmaString{parseSigmaString(text)}
 	}
 	for _, step := range spec.steps {
-		next, err := applyStringStep(step, variants)
+		next, err := applyStringStep(step, variants, b)
 		if err != "" {
-			return nil, []string{fmt.Sprintf("field %q: %s", spec.field, err)}
+			return nil, []string{b.formatError("field %q: %s", spec.field, err)}
 		}
 		variants = next
 	}
-	leaves := make([]Condition, 0, len(variants))
+	b.node(len(variants))
+	if len(variants) > b.limits.conditions-b.conditions {
+		b.fail("conditions", b.limits.conditions)
+	}
+	leaves = make([]Condition, 0, len(variants))
 	for _, variant := range variants {
+		length := 0
+		for _, part := range variant {
+			length += len(part.text) + 1
+		}
+		b.output(b.product(length+1, 2, b.limits.outputBytes-b.outputBytes, "output bytes"))
+		b.step(length)
 		if spec.field == "" {
 			// Keywords match anywhere in the event.
 			variant = variant.withWildcardPrefix().withWildcardSuffix()
@@ -297,9 +323,12 @@ func (spec fieldSpec) valueLeaves(value any) ([]Condition, []string) {
 
 // applyStringStep applies one transformation or position modifier to every
 // variant of a string value.
-func applyStringStep(step string, variants []sigmaString) ([]sigmaString, string) {
+func applyStringStep(step string, variants []sigmaString, budgets ...*parseBudget) ([]sigmaString, string) {
+	b := budgetFrom(budgets)
 	var out []sigmaString
 	for _, variant := range variants {
+		b.step(1)
+		b.node(len(variant) + 2)
 		switch step {
 		case "contains":
 			out = append(out, variant.withWildcardPrefix().withWildcardSuffix())
@@ -311,12 +340,26 @@ func applyStringStep(step string, variants []sigmaString) ([]sigmaString, string
 			out = append(out, variant.withWildcardPrefix())
 			continue
 		case "windash":
-			out = append(out, windash(variant)...)
+			out = append(out, windash(variant, b)...)
 			continue
 		}
 		if variant.hasWildcards() {
 			return nil, step + " encoding is not allowed on values with wildcards"
 		}
+		length := 0
+		for _, part := range variant {
+			length += len(part.text)
+		}
+		b.output(length)
+		b.step(length)
+		// Reserve a conservative bound before encoders allocate. Base64offset
+		// emits three encodings; UTF-16 may double the source bytes plus BOM.
+		factor := 2
+		if step == "base64offset" {
+			factor = 6
+			b.variant(3)
+		}
+		b.output(b.product(length+4, factor, b.limits.outputBytes-b.outputBytes, "output bytes"))
 		literal := variant.literal()
 		switch step {
 		case "utf16le":
@@ -360,10 +403,14 @@ func positionOperator(openStart, openEnd bool) string {
 
 // orExpression ORs leaves, folding values that share a field and match type
 // into one condition with Alternatives.
-func orExpression(leaves []Condition) *Expression {
+func orExpression(leaves []Condition, budgets ...*parseBudget) *Expression {
+	b := budgetFrom(budgets)
+	b.node(2 * len(leaves))
 	merged := make([]Condition, 0, len(leaves))
 	index := make(map[string]int, len(leaves))
+	values := make(map[int]map[string]bool)
 	for _, leaf := range leaves {
+		b.step(len(leaf.Field) + len(leaf.Value) + 1)
 		key, ok := alternativeKey(leaf)
 		if !ok {
 			merged = append(merged, leaf)
@@ -376,15 +423,24 @@ func orExpression(leaves []Condition) *Expression {
 			continue
 		}
 		condition := &merged[at]
+		if values[at] == nil {
+			values[at] = map[string]bool{condition.Value: true}
+			for _, value := range condition.Alternatives {
+				values[at][value] = true
+			}
+		}
 		if len(condition.Alternatives) == 0 {
 			condition.Alternatives = []string{condition.Value}
 		}
-		if !containsString(condition.Alternatives, leaf.Value) {
+		if !values[at][leaf.Value] {
+			values[at][leaf.Value] = true
+			b.node(1)
 			condition.Alternatives = append(condition.Alternatives, leaf.Value)
 		}
 	}
 	children := make([]*Expression, 0, len(merged))
 	for _, condition := range merged {
+		b.copyCondition(condition)
 		children = append(children, leafExpression(condition))
 	}
 	return compactExpression(ExpressionOr, children)
@@ -412,15 +468,6 @@ func negateIf(expression *Expression, negate bool) *Expression {
 		return expression
 	}
 	return &Expression{Kind: ExpressionNot, Children: []*Expression{expression}}
-}
-
-func containsString(values []string, value string) bool {
-	for _, existing := range values {
-		if existing == value {
-			return true
-		}
-	}
-	return false
 }
 
 // formatScalar renders a YAML scalar as Sigma matches it.
