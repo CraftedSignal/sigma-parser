@@ -1,6 +1,10 @@
 package sigma
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // SemanticQuery is the parser-owned semantic view of a Sigma rule. It keeps
 // Sigma-specific selector logic next to the parser instead of rediscovering it
@@ -96,17 +100,41 @@ func enrichSemanticQueryFromYAML(semantic *SemanticQuery, ruleYAML string) {
 	defer func() {
 		_ = recover()
 	}()
-	rule, err := parseSigmaRule(ruleYAML)
+	rules, err := parseSigmaRules(ruleYAML)
 	if err != nil {
 		return
 	}
-	items, _ := resolveDetectionItems(rule.Detection)
-	semantic.Detections = semanticDetectionsFromItems(items)
-	condition, _ := rule.Detection.get("condition")
-	node, aggregations, multipleConditions, _ := parseDetectionCondition(condition)
-	semantic.ConditionExpression = semanticConditionExpressionFromCondNode(node)
-	semantic.Aggregations = cloneSemanticStrings(aggregations)
-	semantic.MultipleConditionStrings = multipleConditions
+	var conditions []*SemanticConditionExpression
+	for i, rule := range rules {
+		items, _ := resolveDetectionItems(rule.Detection)
+		detections := semanticDetectionsFromItems(items)
+		condition, _ := rule.Detection.get("condition")
+		node, aggregations, multipleConditions, _ := parseDetectionCondition(condition)
+		expression := semanticConditionExpressionFromCondNode(node)
+		if len(rules) > 1 {
+			// Namespace the descriptive condition model only after parsing each
+			// rule. Keep private names private so wildcard semantics survive.
+			prefix := fmt.Sprintf("rule%d_", i+1)
+			for j := range detections {
+				detections[j].Name = scopedDetectionName(detections[j].Name, prefix)
+			}
+			scopeSemanticCondition(expression, prefix)
+		}
+		semantic.Detections = append(semantic.Detections, detections...)
+		if expression != nil {
+			conditions = append(conditions, expression)
+		}
+		semantic.Aggregations = append(semantic.Aggregations, aggregations...)
+		semantic.MultipleConditionStrings = semantic.MultipleConditionStrings || multipleConditions
+	}
+	switch len(conditions) {
+	case 1:
+		semantic.ConditionExpression = conditions[0]
+	default:
+		if len(conditions) > 1 {
+			semantic.ConditionExpression = &SemanticConditionExpression{Operator: "or", Children: conditions}
+		}
+	}
 }
 
 func semanticExpressionFromParseExpression(expression *Expression) *SemanticExpression {
@@ -258,4 +286,32 @@ func cloneSemanticStringMap(values map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+// scopedDetectionName preserves the leading underscore used to mark private
+// selections, while keeping names from different collection rules distinct.
+func scopedDetectionName(name, prefix string) string {
+	if strings.HasPrefix(name, "_") {
+		return "_" + prefix + strings.TrimPrefix(name, "_")
+	}
+	return prefix + name
+}
+
+func scopeSemanticCondition(expression *SemanticConditionExpression, prefix string) {
+	if expression == nil {
+		return
+	}
+	if expression.Operator == "ref" {
+		expression.Selector = scopedDetectionName(expression.Selector, prefix)
+	}
+	if expression.Operator == "quantifier" {
+		pattern := expression.Pattern
+		if pattern == "them" {
+			pattern = "*"
+		}
+		expression.Pattern = scopedDetectionName(pattern, prefix)
+	}
+	for _, child := range expression.Children {
+		scopeSemanticCondition(child, prefix)
+	}
 }
