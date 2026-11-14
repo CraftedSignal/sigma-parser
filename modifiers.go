@@ -166,15 +166,16 @@ func fieldExpression(fieldWithMods string, raw any, budgets ...*parseBudget) (*E
 	}
 	if isNestedValue(raw) {
 		if spec.field == "" {
-			return nil, nil, []string{"keyword list contains a nested mapping or list"}
+			return nil, nil, []string{b.formatError("keyword list contains a nested mapping or list")}
 		}
 		return nil, nil, []string{b.formatError("field %q: nested mapping or list is not a valid Sigma value", spec.field)}
 	}
-	values, isNull := fieldValues(raw)
-	if isNull {
-		leaf := Condition{Field: spec.field, Operator: "exists", Value: "false"}
-		b.copyCondition(leaf)
-		return negateIf(leafExpression(leaf), spec.negated), nil, nil
+	values, isList := fieldValues(raw)
+	if isList && len(values) == 0 {
+		return nil, nil, []string{b.formatError("field %q: empty value list is not a Sigma value", spec.field)}
+	}
+	if spec.allOf && !isList {
+		return nil, nil, []string{b.formatError("field %q: all requires a value list", spec.field)}
 	}
 
 	var units []*Expression
@@ -182,6 +183,14 @@ func fieldExpression(fieldWithMods string, raw any, budgets ...*parseBudget) (*E
 	seen := make(map[string]bool, len(values))
 	for _, value := range values {
 		b.step(1)
+		if isList && value == nil {
+			errs = append(errs, b.formatError("field %q: null is not allowed in a value list", spec.field))
+			continue
+		}
+		if err := spec.validateValue(value); err != "" {
+			errs = append(errs, b.formatError("field %q: %s", spec.field, err))
+			continue
+		}
 		// A repeated value adds nothing to an OR or an AND.
 		if key := formatScalar(value); seen[key] {
 			continue
@@ -210,24 +219,56 @@ func fieldExpression(fieldWithMods string, raw any, budgets ...*parseBudget) (*E
 	return negateIf(expr, spec.negated), units, nil
 }
 
-// fieldValues lists the values of an entry. A null value, or an empty list,
-// tests that the field does not exist.
+// fieldValues retains whether values were authored as a list.
 func fieldValues(raw any) ([]any, bool) {
 	list, ok := raw.([]any)
 	if !ok {
-		return []any{raw}, raw == nil
+		return []any{raw}, false
 	}
-	return list, len(list) == 0
+	return list, true
 }
 
-// valueLeaves turns one detection value into the conditions it ORs. A null
-// inside a value list matches an absent field, as in pySigma.
+// validateValue checks authored types before any scalar formatting or dedup.
+func (spec fieldSpec) validateValue(value any) string {
+	b := budgetFrom([]*parseBudget{spec.budget})
+	b.step(1)
+	if value == nil {
+		if spec.kind != kindString || spec.compare != "" || spec.datePart != "" || len(spec.steps) > 0 || spec.openStart || spec.openEnd || spec.cased || spec.expand {
+			return "null is incompatible with these modifiers"
+		}
+		return ""
+	}
+	if spec.kind == kindExists {
+		if spec.field == "" {
+			return "exists requires a field name"
+		}
+		if _, ok := value.(bool); !ok {
+			return "exists requires a Boolean value"
+		}
+	}
+	if spec.kind == kindRegex || spec.kind == kindCIDR || spec.kind == kindFieldRef || spec.expand {
+		if _, ok := value.(string); !ok {
+			return "modifier requires an authored string"
+		}
+	}
+	for _, step := range spec.steps {
+		b.step(1)
+		if valueTransforms[step] {
+			if _, ok := value.(string); !ok {
+				return step + " requires an authored string"
+			}
+		}
+	}
+	return ""
+}
+
+// valueLeaves turns one validated detection value into the conditions it ORs.
 func (spec fieldSpec) valueLeaves(value any) (leaves []Condition, errs []string) {
 	b := budgetFrom([]*parseBudget{spec.budget})
 	b.step(1)
 	defer func() { b.copyConditions(leaves) }()
 	if value == nil {
-		return []Condition{{Field: spec.field, Operator: "exists", Value: "false"}}, nil
+		return []Condition{{Field: spec.field, Operator: "exists", Value: "false", NullTest: true}}, nil
 	}
 	base := Condition{Field: spec.field, CaseSensitive: spec.cased, RequiresExpansion: spec.expand, DatePart: spec.datePart}
 	text := formatScalar(value)
@@ -264,6 +305,14 @@ func (spec fieldSpec) valueLeaves(value any) (leaves []Condition, errs []string)
 		}
 		return []Condition{{Field: spec.field, Operator: "exists", Value: strconv.FormatBool(exists)}}, nil
 	case kindFieldRef:
+		// Parsing escapes and materializing the decoded name can each copy the
+		// authored text. Reserve both copies before either allocation.
+		b.output(b.product(len(text)+1, 2, b.limits.outputBytes-b.outputBytes, "output bytes"))
+		reference := parseSigmaString(text)
+		if reference.hasWildcards() {
+			return nil, []string{b.formatError("field %q: fieldref cannot contain wildcards", spec.field)}
+		}
+		text = reference.literal()
 		if text == "" {
 			return nil, []string{b.formatError("field %q: fieldref needs a field name", spec.field)}
 		}
@@ -407,7 +456,7 @@ func orExpression(leaves []Condition, budgets ...*parseBudget) *Expression {
 	b := budgetFrom(budgets)
 	b.node(2 * len(leaves))
 	merged := make([]Condition, 0, len(leaves))
-	index := make(map[string]int, len(leaves))
+	index := make(map[conditionIdentity]int, len(leaves))
 	values := make(map[int]map[string]bool)
 	for _, leaf := range leaves {
 		b.step(len(leaf.Field) + len(leaf.Value) + 1)
@@ -448,15 +497,11 @@ func orExpression(leaves []Condition, budgets ...*parseBudget) *Expression {
 
 // alternativeKey identifies conditions whose values can share one condition;
 // comparisons, existence checks and field references stay separate.
-func alternativeKey(c Condition) (string, bool) {
-	switch c.Operator {
-	case ">", ">=", "<", "<=", "exists":
-		return "", false
+func alternativeKey(c Condition) (conditionIdentity, bool) {
+	if comparisonOperators[c.Operator] || c.Operator == "exists" || c.ValueReference != "" {
+		return conditionIdentity{}, false
 	}
-	if c.ValueReference != "" {
-		return "", false
-	}
-	return fmt.Sprintf("%s\x00%s\x00%t\x00%t\x00%t\x00%t\x00%s", c.Field, c.Operator, c.CaseSensitive, c.Multiline, c.DotAll, c.RequiresExpansion, c.DatePart), true
+	return metadataIdentity(c), true
 }
 
 func leafExpression(condition Condition) *Expression {
@@ -494,16 +539,6 @@ func isNumber(value any) bool {
 }
 
 func parseBool(value any) (bool, bool) {
-	switch v := value.(type) {
-	case bool:
-		return v, true
-	case string:
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "true", "yes":
-			return true, true
-		case "false", "no":
-			return false, true
-		}
-	}
-	return false, false
+	v, ok := value.(bool)
+	return v, ok
 }

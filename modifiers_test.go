@@ -202,17 +202,14 @@ func TestFieldReferences(t *testing.T) {
 }
 
 func TestNullTestsAbsence(t *testing.T) {
-	for _, value := range []any{nil, []any{}} {
-		leaves := expressionLeaves(mustFieldExpression(t, "PasswordLastSet", value))
-		if len(leaves) != 1 || leaves[0].Operator != "exists" || leaves[0].Value != "false" {
-			t.Fatalf("null should test absence, got %+v", leaves)
-		}
+	leaves := expressionLeaves(mustFieldExpression(t, "PasswordLastSet", nil))
+	if len(leaves) != 1 || leaves[0].Operator != "exists" || leaves[0].Value != "false" || !leaves[0].NullTest {
+		t.Fatalf("authored null should retain its origin and legacy fields, got %+v", leaves)
 	}
-	// A null in a value list ORs an absence test, as pySigma does.
-	expr := mustFieldExpression(t, "ParentImage|endswith", []any{`\explorer.exe`, nil})
-	leaves := expressionLeaves(expr)
-	if expr.Kind != ExpressionOr || len(leaves) != 2 || leaves[0].Operator != "endswith" || leaves[1].Operator != "exists" || leaves[1].Value != "false" {
-		t.Fatalf("expected value OR absent, got %#v", expr)
+	for _, value := range []any{[]any{}, []any{nil}, []any{`\explorer.exe`, nil}} {
+		if expr, _, errs := fieldExpression("ParentImage", value); expr != nil || len(errs) == 0 {
+			t.Fatalf("invalid field-value list must diagnose: expr=%#v errors=%v", expr, errs)
+		}
 	}
 }
 

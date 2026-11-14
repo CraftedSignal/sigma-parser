@@ -59,6 +59,9 @@ func resolveDetectionEntry(name string, raw any, budgets ...*parseBudget) (*dete
 func resolveFieldMap(m orderedMap, budgets ...*parseBudget) (*Expression, []*Expression, []string) {
 	b := budgetFrom(budgets)
 	b.node(len(m))
+	if len(m) == 0 {
+		return nil, nil, []string{b.formatError("empty detection mapping is not a Sigma selection")}
+	}
 	children := make([]*Expression, 0, len(m))
 	var units []*Expression
 	var errs []string
@@ -81,7 +84,7 @@ func resolveList(list []any, budgets ...*parseBudget) (*Expression, bool, []stri
 	b := budgetFrom(budgets)
 	b.node(len(list))
 	if len(list) == 0 {
-		return nil, false, nil
+		return nil, false, []string{b.formatError("empty detection list is not a Sigma selection")}
 	}
 	if _, ok := list[0].(orderedMap); !ok {
 		expr, _, errs := fieldExpression("", list, b)

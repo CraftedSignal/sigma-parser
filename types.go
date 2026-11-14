@@ -10,6 +10,7 @@ type Condition struct {
 	Field             string   // Field name (empty for keyword conditions)
 	Operator          string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", ">", ">=", "<", "<=", "exists", "keyword"
 	Value             string   // The condition value
+	NullTest          bool     `json:"null_test,omitempty"` // Authored Sigma null test; authoritative over legacy Operator="exists", Value="false"
 	ValueReference    string   // Referenced field name for |fieldref (Operator gives the match position)
 	Negated           bool     // True if condition is negated (NOT)
 	CaseSensitive     bool     // True for |cased strings and for regexes without |i

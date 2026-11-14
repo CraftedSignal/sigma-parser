@@ -1,6 +1,9 @@
 package sigma
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // groupORConditions merges consecutive OR conditions on the same field and operator
 // into a single Condition with Alternatives. Ported from spl-parser.
@@ -54,14 +57,30 @@ func groupORConditions(conditions []Condition, budgets ...*parseBudget) []Condit
 // position-dependent, make extraction non-deterministic).
 var comparisonOperators = map[string]bool{">": true, ">=": true, "<": true, "<=": true}
 
+// conditionIdentity holds all non-operand leaf metadata. LogicalOp is a
+// connection in the legacy flat projection, not part of a predicate's identity.
+// Field casing retains the existing expression/flat caller policies.
+type conditionIdentity struct {
+	Field, Operator, ValueReference, DatePart, SourceField                             string
+	Negated, CaseSensitive, Multiline, DotAll, RequiresExpansion, IsComputed, NullTest bool
+	PipeStage                                                                          int
+}
+
+func metadataIdentity(c Condition) conditionIdentity {
+	return conditionIdentity{Field: c.Field, Operator: c.Operator, ValueReference: c.ValueReference,
+		DatePart: c.DatePart, SourceField: c.SourceField, Negated: c.Negated,
+		CaseSensitive: c.CaseSensitive, Multiline: c.Multiline, DotAll: c.DotAll,
+		RequiresExpansion: c.RequiresExpansion, IsComputed: c.IsComputed, NullTest: c.NullTest, PipeStage: c.PipeStage}
+}
+
 func sameConditionGroup(a, b Condition) bool {
-	if comparisonOperators[a.Operator] {
+	ak, aok := alternativeKey(a)
+	bk, bok := alternativeKey(b)
+	if !aok || !bok || !strings.EqualFold(ak.Field, bk.Field) {
 		return false
 	}
-	return strings.EqualFold(a.Field, b.Field) &&
-		a.Operator == b.Operator &&
-		a.Negated == b.Negated &&
-		a.CaseSensitive == b.CaseSensitive
+	ak.Field, bk.Field = "", ""
+	return ak == bk
 }
 
 func conditionAlternatives(cond Condition, budgets ...*parseBudget) []string {
@@ -81,16 +100,12 @@ func deduplicateConditions(conditions []Condition, budgets ...*parseBudget) []Co
 		return conditions
 	}
 
-	seen := make(map[string]bool)
+	seen := make(map[conditionKey]bool)
 	result := make([]Condition, 0, len(conditions))
 
 	for _, cond := range conditions {
 		b.step(1)
-		b.output(len(cond.Field) + len(cond.Value) + len(cond.Operator) + 16)
-		for _, value := range cond.Alternatives {
-			b.output(len(value) + 1)
-		}
-		key := conditionDedupKey(cond)
+		key := conditionDedupKey(cond, b)
 		if !seen[key] {
 			seen[key] = true
 			result = append(result, cond)
@@ -100,18 +115,25 @@ func deduplicateConditions(conditions []Condition, budgets ...*parseBudget) []Co
 	return result
 }
 
-func conditionDedupKey(cond Condition) string {
-	return strings.ToLower(cond.Field) + "|" +
-		cond.Operator + "|" +
-		cond.Value + "|" +
-		boolKey(cond.Negated) + "|" +
-		boolKey(cond.CaseSensitive) + "|" +
-		strings.Join(cond.Alternatives, "\x00")
+type conditionKey struct {
+	Metadata            conditionIdentity
+	Value, Alternatives string
 }
 
-func boolKey(value bool) string {
-	if value {
-		return "1"
+// Length-prefixed alternatives preserve embedded separators, including NUL.
+func conditionDedupKey(cond Condition, budgets ...*parseBudget) conditionKey {
+	b := budgetFrom(budgets)
+	metadata := metadataIdentity(cond)
+	b.step(len(cond.Field) + len(cond.Value) + len(cond.Operator) + len(cond.ValueReference) + len(cond.DatePart) + len(cond.SourceField) + 1)
+	b.output(len(cond.Field)) // possible lowercase field copy
+	metadata.Field = strings.ToLower(cond.Field)
+	var alternatives strings.Builder
+	for _, value := range cond.Alternatives {
+		b.step(len(value) + 1)
+		b.output(len(value) + 24) // decimal length, separator, and value before allocation
+		alternatives.WriteString(strconv.Itoa(len(value)))
+		alternatives.WriteByte(':')
+		alternatives.WriteString(value)
 	}
-	return "0"
+	return conditionKey{Metadata: metadata, Value: cond.Value, Alternatives: alternatives.String()}
 }
