@@ -1,6 +1,10 @@
 package sigma
 
-import "gopkg.in/yaml.v3"
+import (
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
 
 // mapEntry is one key/value pair of a YAML mapping.
 type mapEntry struct {
@@ -25,23 +29,26 @@ func (m orderedMap) get(key string) (any, bool) {
 // decodeOrdered converts a YAML node into plain Go values, decoding mappings
 // as orderedMap. Timestamps keep their source text: a detection value such as
 // 2024-01-02 is a string to match, not a time.
-func decodeOrdered(node *yaml.Node) (any, error) {
+func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
+	b := budgetFrom(budgets)
+	defer b.visitYAML(node)()
 	switch node.Kind {
 	case yaml.DocumentNode:
 		if len(node.Content) == 0 {
 			return nil, nil
 		}
-		return decodeOrdered(node.Content[0])
+		return decodeOrdered(node.Content[0], b)
 	case yaml.AliasNode:
-		return decodeOrdered(node.Alias)
+		return decodeOrdered(node.Alias, b)
 	case yaml.MappingNode:
+		b.node(len(node.Content) / 2)
 		out := make(orderedMap, 0, len(node.Content)/2)
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			var key string
-			if err := node.Content[i].Decode(&key); err != nil {
+			key, err := decodeOrderedKey(node.Content[i], b)
+			if err != nil {
 				return nil, err
 			}
-			value, err := decodeOrdered(node.Content[i+1])
+			value, err := decodeOrdered(node.Content[i+1], b)
 			if err != nil {
 				return nil, err
 			}
@@ -49,9 +56,10 @@ func decodeOrdered(node *yaml.Node) (any, error) {
 		}
 		return out, nil
 	case yaml.SequenceNode:
+		b.node(len(node.Content))
 		out := make([]any, 0, len(node.Content))
 		for _, child := range node.Content {
-			value, err := decodeOrdered(child)
+			value, err := decodeOrdered(child, b)
 			if err != nil {
 				return nil, err
 			}
@@ -68,6 +76,33 @@ func decodeOrdered(node *yaml.Node) (any, error) {
 		}
 		return value, nil
 	}
+}
+
+func (b *parseBudget) visitYAML(node *yaml.Node) func() {
+	b.step(1)
+	b.node(1)
+	leave := b.enter()
+	if node == nil {
+		panic(parseAbort{fmt.Errorf("invalid YAML alias target")})
+	}
+	if b.active[node] {
+		panic(parseAbort{fmt.Errorf("cyclic YAML alias")})
+	}
+	b.active[node] = true
+	if node.Kind == yaml.ScalarNode {
+		b.decoded(len(node.Value))
+	}
+	return func() { delete(b.active, node); leave() }
+}
+
+func decodeOrderedKey(node *yaml.Node, b *parseBudget) (string, error) {
+	defer b.visitYAML(node)()
+	if node.Kind == yaml.AliasNode {
+		return decodeOrderedKey(node.Alias, b)
+	}
+	var key string
+	err := node.Decode(&key)
+	return key, err
 }
 
 func (m orderedMap) without(key string) orderedMap {

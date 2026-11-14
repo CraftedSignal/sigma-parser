@@ -117,6 +117,49 @@ fmt.Println(result.Commands)      // [count]
 | Correlation rules, v2.1.0 (all types, aliases, chaining) | Supported; `ExtractFile` resolves references by name or id within the file |
 | Warnings | `Warnings` flags exact command-line values that can only be a parameter, such as `CommandLine: -NoProfile` |
 
+## Resource bounds and cancellation
+
+`ExtractConditions`, `ExtractFile`, and `AnalyzeQuery` reject complete inputs
+larger than `MaxInputSize` (1 MiB) before YAML decoding. The corresponding
+`ExtractConditionsContext`, `ExtractFileContext`, and `AnalyzeQueryContext`
+functions also accept caller cancellation. Parsing runs synchronously with a
+cooperative five-second deadline; it does not leave a background parse worker.
+
+Each operation shares these limits across all documents, YAML alias
+occurrences, values, modifiers, selector references, and semantic enrichment:
+
+| Resource | Limit |
+|----------|-------|
+| YAML documents | 256 |
+| YAML/expression/correlation traversal depth | 64 |
+| Materialized/expanded nodes and container slots | 100,000 |
+| Cumulative decoded scalar bytes | 8 MiB |
+| Materialized modifier variants | 10,000 |
+| Materialized condition copies | 10,000 |
+| Generated/copied output text | 16 MiB |
+| Explicit traversal/processing work units | 4,000,000 |
+
+These are cumulative work limits, including intermediate representations and
+copies, rather than limits on the final deduplicated result. For example,
+`AnalyzeQuery` charges extraction and semantic enrichment to the same budget.
+Ordinary repeated aliases are supported; aliases that cycle or exceed the
+cumulative bounds are rejected. Windash Cartesian products are checked before
+allocation. Correlation references are also checked as expanded output, even
+when their internal representation shares a referenced rule.
+
+A resource or cancellation failure returns an error and no partial conditions,
+expression, detections, or file rules. Detection semantics are never truncated
+to fit a limit. Larger collections and highly expansive valid rules may need
+to be split into smaller inputs.
+
+Cancellation is cooperative, not a hard real-time or per-call heap guarantee.
+The handwritten traversal and expansion stages check the context and work
+budget. `yaml.v3` has no context-aware decoder: the reader and boundaries around
+`Decode` check cancellation, but cannot interrupt decoder work on already
+buffered bytes. The input cap bounds what reaches that decoder. The node and scalar-byte
+counters cover traversal and materialization after decoding; the decoder
+builds its initial YAML node tree under the input cap.
+
 ## API Reference
 
 ### Types

@@ -4,7 +4,9 @@ import "strings"
 
 // groupORConditions merges consecutive OR conditions on the same field and operator
 // into a single Condition with Alternatives. Ported from spl-parser.
-func groupORConditions(conditions []Condition) []Condition {
+func groupORConditions(conditions []Condition, budgets ...*parseBudget) []Condition {
+	b := budgetFrom(budgets)
+	b.node(len(conditions))
 	if len(conditions) == 0 {
 		return conditions
 	}
@@ -12,17 +14,19 @@ func groupORConditions(conditions []Condition) []Condition {
 	result := make([]Condition, 0, len(conditions))
 
 	for i := 0; i < len(conditions); i++ {
+		b.step(1)
 		cond := conditions[i]
 
 		// Look ahead for OR conditions on the same field
 		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) {
-			alternatives := conditionAlternatives(cond)
+			alternatives := conditionAlternatives(cond, b)
 
 			j := i + 1
 			for j < len(conditions) {
+				b.step(1)
 				next := conditions[j]
 				if next.LogicalOp == "OR" && sameConditionGroup(cond, next) {
-					alternatives = append(alternatives, conditionAlternatives(next)...)
+					alternatives = append(alternatives, conditionAlternatives(next, b)...)
 					j++
 				} else {
 					break
@@ -30,6 +34,7 @@ func groupORConditions(conditions []Condition) []Condition {
 			}
 
 			if len(alternatives) > 1 {
+				b.node(len(alternatives))
 				cond.Alternatives = deduplicateStrings(alternatives)
 				result = append(result, cond)
 				i = j - 1
@@ -59,7 +64,9 @@ func sameConditionGroup(a, b Condition) bool {
 		a.CaseSensitive == b.CaseSensitive
 }
 
-func conditionAlternatives(cond Condition) []string {
+func conditionAlternatives(cond Condition, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.node(1 + len(cond.Alternatives))
 	if len(cond.Alternatives) > 0 {
 		return append([]string(nil), cond.Alternatives...)
 	}
@@ -67,7 +74,9 @@ func conditionAlternatives(cond Condition) []string {
 }
 
 // deduplicateConditions removes duplicate conditions by field+operator+value.
-func deduplicateConditions(conditions []Condition) []Condition {
+func deduplicateConditions(conditions []Condition, budgets ...*parseBudget) []Condition {
+	b := budgetFrom(budgets)
+	b.node(2 * len(conditions))
 	if len(conditions) == 0 {
 		return conditions
 	}
@@ -76,6 +85,11 @@ func deduplicateConditions(conditions []Condition) []Condition {
 	result := make([]Condition, 0, len(conditions))
 
 	for _, cond := range conditions {
+		b.step(1)
+		b.output(len(cond.Field) + len(cond.Value) + len(cond.Operator) + 16)
+		for _, value := range cond.Alternatives {
+			b.output(len(value) + 1)
+		}
 		key := conditionDedupKey(cond)
 		if !seen[key] {
 			seen[key] = true

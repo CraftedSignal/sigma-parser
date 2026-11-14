@@ -1,7 +1,6 @@
 package sigma
 
 import (
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -50,6 +49,7 @@ func (condNodeQuantifier) condNode() {}
 
 // conditionParser is a recursive descent parser for Sigma condition expressions.
 type conditionParser struct {
+	budget *parseBudget
 	tokens []token
 	pos    int
 	errors []string
@@ -57,12 +57,13 @@ type conditionParser struct {
 
 // parseConditionExpr parses a condition expression string and returns the AST
 // plus any aggregation expression (text after |).
-func parseConditionExpr(condStr string) (condNode, string, []string) {
-	lexer := newConditionLexer(condStr)
-	p := &conditionParser{tokens: lexer.tokens}
+func parseConditionExpr(condStr string, budgets ...*parseBudget) (condNode, string, []string) {
+	b := budgetFrom(budgets)
+	lexer := newConditionLexer(condStr, b)
+	p := &conditionParser{tokens: lexer.tokens, budget: b}
 	node := p.parseOr()
 	if next := p.peek(); next.typ != tokEOF && next.typ != tokPipe {
-		p.errors = append(p.errors, fmt.Sprintf("unexpected token after condition expression: %q", next.val))
+		p.errors = append(p.errors, b.formatError("unexpected token after condition expression: %q", next.val))
 	}
 
 	// Check for aggregation after pipe
@@ -85,6 +86,9 @@ func (p *conditionParser) peek() token {
 }
 
 func (p *conditionParser) advance() token {
+	if p.budget != nil {
+		p.budget.step(1)
+	}
 	t := p.peek()
 	if p.pos < len(p.tokens) {
 		p.pos++
@@ -126,6 +130,10 @@ func (p *conditionParser) parseAnd() condNode {
 
 // parseNot: notExpr := "not" notExpr | atom
 func (p *conditionParser) parseNot() condNode {
+	if p.budget == nil {
+		p.budget = budgetFrom(nil)
+	}
+	defer p.budget.enter()()
 	if p.peek().typ == tokNot {
 		p.advance()
 		return condNodeNot{child: p.parseNot()}
@@ -186,7 +194,7 @@ func (p *conditionParser) parseAtom() condNode {
 		return condNodeRef{name: ""}
 
 	default:
-		p.errors = append(p.errors, fmt.Sprintf("unexpected token: %q", t.val))
+		p.errors = append(p.errors, p.budget.formatError("unexpected token: %q", t.val))
 		p.advance()
 		return condNodeRef{name: ""}
 	}
@@ -211,20 +219,24 @@ func (p *conditionParser) parsePattern() string {
 		}
 		return t.val
 	default:
-		p.errors = append(p.errors, fmt.Sprintf("expected pattern after 'of', got %q", t.val))
+		p.errors = append(p.errors, p.budget.formatError("expected pattern after 'of', got %q", t.val))
 		return ""
 	}
 }
 
 // evaluateAST walks the condition AST and emits Conditions by looking up
 // detection items. The logicalOp and negated parameters are propagated down.
-func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) []Condition {
+func evaluateAST(node condNode, items map[string]*detectionItem, negated bool, budgets ...*parseBudget) []Condition {
+	b := budgetFrom(budgets)
+	b.step(1)
+	defer b.enter()()
 	switch n := node.(type) {
 	case condNodeRef:
 		item, ok := items[n.name]
 		if !ok {
 			return nil
 		}
+		b.copyConditions(item.conditions)
 		conds := make([]Condition, len(item.conditions))
 		copy(conds, item.conditions)
 		if negated {
@@ -241,7 +253,8 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) [
 			logicalOp = "OR"
 		}
 		for i, child := range n.children {
-			childConds := evaluateAST(child, items, negated)
+			childConds := evaluateAST(child, items, negated, b)
+			b.node(len(childConds))
 			if i > 0 && len(childConds) > 0 {
 				childConds[0].LogicalOp = logicalOp
 			}
@@ -256,7 +269,8 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) [
 			logicalOp = "AND"
 		}
 		for i, child := range n.children {
-			childConds := evaluateAST(child, items, negated)
+			childConds := evaluateAST(child, items, negated, b)
+			b.node(len(childConds))
 			if i > 0 && len(childConds) > 0 {
 				childConds[0].LogicalOp = logicalOp
 			}
@@ -265,10 +279,10 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) [
 		return result
 
 	case condNodeNot:
-		return evaluateAST(n.child, items, !negated)
+		return evaluateAST(n.child, items, !negated, b)
 
 	case condNodeQuantifier:
-		return evaluateQuantifier(n, items, negated)
+		return evaluateQuantifier(n, items, negated, b)
 
 	default:
 		return nil
@@ -276,9 +290,10 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool) [
 }
 
 // evaluateQuantifier handles "X of Y" by glob-matching detection item names.
-func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, negated bool) []Condition {
+func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, negated bool, budgets ...*parseBudget) []Condition {
+	b := budgetFrom(budgets)
 	// Find matching detection items
-	matchingNames := matchDetectionItems(q.pattern, items)
+	matchingNames := matchDetectionItems(q.pattern, items, b)
 
 	if len(matchingNames) == 0 {
 		return nil
@@ -288,7 +303,9 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 
 	var result []Condition
 	for i, name := range matchingNames {
+		b.step(1)
 		item := items[name]
+		b.copyConditions(item.conditions)
 		conds := make([]Condition, len(item.conditions))
 		copy(conds, item.conditions)
 
@@ -322,10 +339,15 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 // Per the Sigma specification, `*` matches any characters at any position,
 // and identifiers starting with `_` are excluded unless the pattern itself
 // starts with `_`.
-func matchDetectionItems(pattern string, items map[string]*detectionItem) []string {
+func matchDetectionItems(pattern string, items map[string]*detectionItem, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.step(b.product(len(pattern)+1, len(items)+1, b.limits.work-b.work, "work"))
+	b.node(strings.Count(pattern, "*") + len(items) + 1)
+	b.output(b.product(len(pattern)+1, 2, b.limits.outputBytes-b.outputBytes, "output bytes"))
 	matcher := selectorPattern(pattern)
 	var names []string
 	for name := range items {
+		b.step(b.product(len(pattern)+1, len(name)+1, b.limits.work-b.work, "work"))
 		if strings.HasPrefix(name, "_") && !strings.HasPrefix(pattern, "_") {
 			continue
 		}
@@ -351,30 +373,34 @@ func selectorPattern(pattern string) *regexp.Regexp {
 // conditionReferenceErrors reports identifiers and selectors in a condition
 // that match no search identifier. Sigma rejects such rules; dropping the
 // reference would silently change what the rule matches.
-func conditionReferenceErrors(node condNode, items map[string]*detectionItem) []string {
+func conditionReferenceErrors(node condNode, items map[string]*detectionItem, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.step(1)
+	defer b.enter()()
 	switch n := node.(type) {
 	case condNodeRef:
 		if _, ok := items[n.name]; !ok && n.name != "" {
-			return []string{fmt.Sprintf("condition references undefined search identifier %q", n.name)}
+			return []string{b.formatError("condition references undefined search identifier %q", n.name)}
 		}
 	case condNodeQuantifier:
-		if len(matchDetectionItems(n.pattern, items)) == 0 {
-			return []string{fmt.Sprintf("condition selector %q of %q matches no search identifier", n.quantifier, n.pattern)}
+		if len(matchDetectionItems(n.pattern, items, b)) == 0 {
+			return []string{b.formatError("condition selector %q of %q matches no search identifier", n.quantifier, n.pattern)}
 		}
 	case condNodeNot:
-		return conditionReferenceErrors(n.child, items)
+		return conditionReferenceErrors(n.child, items, b)
 	case condNodeAnd:
-		return childReferenceErrors(n.children, items)
+		return childReferenceErrors(n.children, items, b)
 	case condNodeOr:
-		return childReferenceErrors(n.children, items)
+		return childReferenceErrors(n.children, items, b)
 	}
 	return nil
 }
 
-func childReferenceErrors(children []condNode, items map[string]*detectionItem) []string {
+func childReferenceErrors(children []condNode, items map[string]*detectionItem, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
 	var errs []string
 	for _, child := range children {
-		errs = append(errs, conditionReferenceErrors(child, items)...)
+		errs = append(errs, conditionReferenceErrors(child, items, b)...)
 	}
 	return errs
 }

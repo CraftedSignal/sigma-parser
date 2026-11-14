@@ -9,28 +9,28 @@ import (
 type tokenType int
 
 const (
-	tokIdent    tokenType = iota // identifier (detection item name)
-	tokAnd                      // "and"
-	tokOr                       // "or"
-	tokNot                      // "not"
-	tokLParen                   // "("
-	tokRParen                   // ")"
-	tokPipe                     // "|"
-	tokNumber                   // integer literal
-	tokGT                       // ">"
-	tokGTE                      // ">="
-	tokLT                       // "<"
-	tokLTE                      // "<="
-	tokEQ                       // "="
-	tokOf                       // "of"
-	tokNear                     // "near"
-	tokBy                       // "by"
-	tokStar                     // "*"
-	tokComma                    // ","
-	tokString                   // quoted string
-	tokThem                     // "them"
-	tokAll                      // "all" (as quantifier)
-	tokEOF                      // end of input
+	tokIdent  tokenType = iota // identifier (detection item name)
+	tokAnd                     // "and"
+	tokOr                      // "or"
+	tokNot                     // "not"
+	tokLParen                  // "("
+	tokRParen                  // ")"
+	tokPipe                    // "|"
+	tokNumber                  // integer literal
+	tokGT                      // ">"
+	tokGTE                     // ">="
+	tokLT                      // "<"
+	tokLTE                     // "<="
+	tokEQ                      // "="
+	tokOf                      // "of"
+	tokNear                    // "near"
+	tokBy                      // "by"
+	tokStar                    // "*"
+	tokComma                   // ","
+	tokString                  // quoted string
+	tokThem                    // "them"
+	tokAll                     // "all" (as quantifier)
+	tokEOF                     // end of input
 )
 
 // token represents a single lexer token.
@@ -42,20 +42,27 @@ type token struct {
 
 // conditionLexer tokenizes Sigma condition expressions.
 type conditionLexer struct {
+	budget *parseBudget
 	input  string
 	pos    int
 	tokens []token
 }
 
 // newConditionLexer creates a lexer and tokenizes the input.
-func newConditionLexer(input string) *conditionLexer {
-	l := &conditionLexer{input: input}
+func newConditionLexer(input string, budgets ...*parseBudget) *conditionLexer {
+	b := budgetFrom(budgets)
+	b.step(len(input))
+	l := &conditionLexer{input: input, budget: b}
 	l.tokenize()
 	return l
 }
 
 func (l *conditionLexer) tokenize() {
 	for l.pos < len(l.input) {
+		if l.budget != nil {
+			l.budget.step(1)
+			l.budget.node(1)
+		}
 		ch := l.input[l.pos]
 
 		// Skip whitespace
@@ -121,6 +128,9 @@ func (l *conditionLexer) readString(quote byte) {
 	start := l.pos
 	l.pos++ // skip opening quote
 	for l.pos < len(l.input) && l.input[l.pos] != quote {
+		if l.budget != nil {
+			l.budget.step(1)
+		}
 		if l.input[l.pos] == '\\' {
 			l.pos++ // skip escape
 		}
@@ -136,6 +146,9 @@ func (l *conditionLexer) readString(quote byte) {
 func (l *conditionLexer) readNumber() {
 	start := l.pos
 	for l.pos < len(l.input) && unicode.IsDigit(rune(l.input[l.pos])) {
+		if l.budget != nil {
+			l.budget.step(1)
+		}
 		l.pos++
 	}
 	l.tokens = append(l.tokens, token{tokNumber, l.input[start:l.pos], start})
@@ -144,6 +157,9 @@ func (l *conditionLexer) readNumber() {
 func (l *conditionLexer) readIdentOrKeyword() {
 	start := l.pos
 	for l.pos < len(l.input) && isIdentChar(rune(l.input[l.pos])) {
+		if l.budget != nil {
+			l.budget.step(1)
+		}
 		l.pos++
 	}
 	word := l.input[start:l.pos]

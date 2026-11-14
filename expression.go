@@ -5,29 +5,34 @@ import (
 	"strings"
 )
 
-func buildExpression(node condNode, items map[string]*detectionItem) *Expression {
+func buildExpression(node condNode, items map[string]*detectionItem, budgets ...*parseBudget) *Expression {
+	b := budgetFrom(budgets)
+	b.step(1)
+	b.node(1)
+	defer b.enter()()
 	switch typedNode := node.(type) {
 	case condNodeRef:
 		item, ok := items[typedNode.name]
 		if !ok {
 			return nil
 		}
-		return cloneExpression(item.expr)
+		return cloneExpression(item.expr, b)
 	case condNodeAnd:
-		return expressionGroup(ExpressionAnd, typedNode.children, items)
+		return expressionGroup(ExpressionAnd, typedNode.children, items, b)
 	case condNodeOr:
-		return expressionGroup(ExpressionOr, typedNode.children, items)
+		return expressionGroup(ExpressionOr, typedNode.children, items, b)
 	case condNodeNot:
-		child := buildExpression(typedNode.child, items)
+		child := buildExpression(typedNode.child, items, b)
 		if child == nil {
 			return nil
 		}
 		return &Expression{Kind: ExpressionNot, Children: []*Expression{child}}
 	case condNodeQuantifier:
-		names := matchDetectionItems(typedNode.pattern, items)
+		names := matchDetectionItems(typedNode.pattern, items, b)
+		b.node(len(names))
 		children := make([]*Expression, 0, len(names))
 		for _, name := range names {
-			if child := cloneExpression(items[name].expr); child != nil {
+			if child := cloneExpression(items[name].expr, b); child != nil {
 				children = append(children, child)
 			}
 		}
@@ -47,7 +52,7 @@ func buildExpression(node condNode, items map[string]*detectionItem) *Expression
 			// values listed under flags match.
 			children = children[:0]
 			for _, unit := range items[names[0]].units {
-				children = append(children, cloneExpression(unit))
+				children = append(children, cloneExpression(unit, b))
 			}
 		}
 		return &Expression{Kind: ExpressionThreshold, Children: children, Threshold: threshold}
@@ -56,7 +61,10 @@ func buildExpression(node condNode, items map[string]*detectionItem) *Expression
 	}
 }
 
-func validateExpression(expression *Expression) []string {
+func validateExpression(expression *Expression, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.step(1)
+	defer b.enter()()
 	if expression == nil {
 		return nil
 	}
@@ -65,15 +73,17 @@ func validateExpression(expression *Expression) []string {
 		errors = append(errors, "threshold requires more matching selections than the condition pattern provides")
 	}
 	for _, child := range expression.Children {
-		errors = append(errors, validateExpression(child)...)
+		errors = append(errors, validateExpression(child, b)...)
 	}
 	return errors
 }
 
-func expressionGroup(kind ExpressionKind, nodes []condNode, items map[string]*detectionItem) *Expression {
+func expressionGroup(kind ExpressionKind, nodes []condNode, items map[string]*detectionItem, budgets ...*parseBudget) *Expression {
+	b := budgetFrom(budgets)
+	b.node(len(nodes))
 	children := make([]*Expression, 0, len(nodes))
 	for _, node := range nodes {
-		child := buildExpression(node, items)
+		child := buildExpression(node, items, b)
 		if child != nil {
 			children = append(children, child)
 		}
@@ -85,18 +95,23 @@ func isWildcardPattern(pattern string) bool {
 	return pattern == "them" || strings.Contains(pattern, "*")
 }
 
-func cloneExpression(expression *Expression) *Expression {
+func cloneExpression(expression *Expression, budgets ...*parseBudget) *Expression {
+	b := budgetFrom(budgets)
+	b.step(1)
+	b.node(1)
+	defer b.enter()()
 	if expression == nil {
 		return nil
 	}
 	clone := &Expression{Kind: expression.Kind, Threshold: expression.Threshold}
 	if expression.Condition != nil {
+		b.copyCondition(*expression.Condition)
 		condition := *expression.Condition
 		condition.Alternatives = append([]string(nil), condition.Alternatives...)
 		clone.Condition = &condition
 	}
 	for _, child := range expression.Children {
-		clone.Children = append(clone.Children, cloneExpression(child))
+		clone.Children = append(clone.Children, cloneExpression(child, b))
 	}
 	return clone
 }

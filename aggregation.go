@@ -23,7 +23,10 @@ type aggregation struct {
 //	count(fieldname) by src_ip > 10
 //	sum(bytes) by host >= 1000
 //	near selection1 and selection2
-func parseAggregation(expr string, timeframe string) (*aggregation, []string) {
+func parseAggregation(expr string, timeframe string, budgets ...*parseBudget) (*aggregation, []string) {
+	b := budgetFrom(budgets)
+	b.step(len(expr) + 1)
+	b.output(len(expr))
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
 		return nil, nil
@@ -32,19 +35,20 @@ func parseAggregation(expr string, timeframe string) (*aggregation, []string) {
 	// Check for "near" aggregation
 	lower := strings.ToLower(expr)
 	if strings.HasPrefix(lower, "near") {
-		return parseNear(expr, timeframe)
+		return parseNear(expr, timeframe, b)
 	}
 
-	return parseFunctionAggregation(expr)
+	return parseFunctionAggregation(expr, b)
 }
 
 // parseFunctionAggregation parses count/sum/min/max/avg/distinct_count aggregations.
-func parseFunctionAggregation(expr string) (*aggregation, []string) {
+func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregation, []string) {
+	b := budgetFrom(budgets)
 	var errors []string
 	agg := &aggregation{}
 
 	// Tokenize for aggregation parsing
-	lexer := newConditionLexer(expr)
+	lexer := newConditionLexer(expr, b)
 	tokens := lexer.tokens
 	pos := 0
 
@@ -52,6 +56,7 @@ func parseFunctionAggregation(expr string) (*aggregation, []string) {
 		return tokens[pos]
 	}
 	advance := func() token {
+		b.step(1)
 		t := peek()
 		if pos < len(tokens) {
 			pos++
@@ -137,15 +142,17 @@ func parseFunctionAggregation(expr string) (*aggregation, []string) {
 
 // parseNear parses "near" aggregation expressions.
 // Example: near selection1 and selection2
-func parseNear(expr string, _ string) (*aggregation, []string) {
+func parseNear(expr string, _ string, budgets ...*parseBudget) (*aggregation, []string) {
+	b := budgetFrom(budgets)
 	agg := &aggregation{isNear: true, function: "near"}
 
 	// Strip "near" prefix
 	rest := strings.TrimSpace(expr[4:])
 
 	// Split on " and " (case-insensitive)
-	parts := splitOnAnd(rest)
+	parts := splitOnAnd(rest, b)
 	for _, p := range parts {
+		b.step(1)
 		p = strings.TrimSpace(p)
 		if p != "" {
 			agg.nearItems = append(agg.nearItems, p)
@@ -156,10 +163,15 @@ func parseNear(expr string, _ string) (*aggregation, []string) {
 }
 
 // splitOnAnd splits a string on " and " (case-insensitive).
-func splitOnAnd(s string) []string {
+func splitOnAnd(s string, budgets ...*parseBudget) []string {
+	b := budgetFrom(budgets)
+	b.step(len(s) + 1)
+	b.output(len(s))
 	lower := strings.ToLower(s)
 	var parts []string
 	for {
+		b.step(1)
+		b.node(1)
 		idx := strings.Index(lower, " and ")
 		if idx < 0 {
 			parts = append(parts, strings.TrimSpace(s))
@@ -193,11 +205,9 @@ func (a *aggregation) toConditions() ([]Condition, []string, []string) {
 
 	// Produce an aggregation condition
 	if a.comparison != "" && a.threshold != "" {
-		aggField := a.function
+		aggField := a.function + "()"
 		if a.field != "" {
 			aggField = a.function + "(" + a.field + ")"
-		} else {
-			aggField = a.function + "()"
 		}
 
 		conditions = append(conditions, Condition{
