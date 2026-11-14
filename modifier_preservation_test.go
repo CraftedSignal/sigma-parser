@@ -160,7 +160,7 @@ func TestConditionIdentityHasNoDelimiterCollisions(t *testing.T) {
 
 func TestPublicModifierInputTypes(t *testing.T) {
 	invalid := []string{
-		"Field: ['', null]", "Field: [null]", "Field|exists: null", "Field|re: null", "Field|contains: null", "Field|base64: null", "Field|fieldref: null", "Field|hour: null",
+		"Field: ['', null]", "Field: [null]", "Field|exists: null", "Field|re: null", "Field|contains: null", "Field|base64: null", "Field|fieldref: null", "Field|hour: null", "Field|cased: null", "Field|cased|neq: null",
 		"Field|exists: 'yes'", "Field|exists: 'true'", "Field|exists: 'no'", "Field|exists: 1", "'|exists': true",
 		"Field|contains|all: alpha", "Field|all: null", "Field|all: 42",
 		"Field|re: 42", "Field|re: false", "Field|base64: 42", "Field|base64: false", "Field|fieldref: 42",

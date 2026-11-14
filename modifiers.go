@@ -233,7 +233,7 @@ func (spec fieldSpec) validateValue(value any) string {
 	b := budgetFrom([]*parseBudget{spec.budget})
 	b.step(1)
 	if value == nil {
-		if spec.kind != kindString || spec.compare != "" || spec.datePart != "" || len(spec.steps) > 0 || spec.openStart || spec.openEnd || spec.expand {
+		if spec.kind != kindString || spec.compare != "" || spec.datePart != "" || len(spec.steps) > 0 || spec.openStart || spec.openEnd || spec.cased || spec.expand {
 			return "null is incompatible with these modifiers"
 		}
 		return ""
