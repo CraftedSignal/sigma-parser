@@ -305,6 +305,9 @@ func (spec fieldSpec) valueLeaves(value any) (leaves []Condition, errs []string)
 		}
 		return []Condition{{Field: spec.field, Operator: "exists", Value: strconv.FormatBool(exists)}}, nil
 	case kindFieldRef:
+		// Parsing escapes and materializing the decoded name can each copy the
+		// authored text. Reserve both copies before either allocation.
+		b.output(b.product(len(text)+1, 2, b.limits.outputBytes-b.outputBytes, "output bytes"))
 		reference := parseSigmaString(text)
 		if reference.hasWildcards() {
 			return nil, []string{b.formatError("field %q: fieldref cannot contain wildcards", spec.field)}
