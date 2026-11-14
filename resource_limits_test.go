@@ -155,12 +155,12 @@ func TestResourceCancellationReturnsNoPartialResult(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	reached := false
 	result := guardedWithLimits(ctx, smallResourceRule, defaultParseLimits(), func(b *parseBudget) *ParseResult {
-		rule, err := parseSigmaRule(smallResourceRule, b)
+		rules, err := parseSigmaRules(smallResourceRule, b)
 		if err != nil {
 			t.Fatal(err)
 		}
 		cancel()
-		result := extractRule(rule, b)
+		result := extractRule(rules[0], b)
 		reached = true
 		return result
 	}, func(message string) *ParseResult { return &ParseResult{Errors: []string{message}} })
@@ -289,5 +289,22 @@ func TestResourceSemanticEnrichmentDoesNotSwallowAbort(t *testing.T) {
 				t.Fatalf("enrichment swallowed abort and returned partial semantics: %+v", result)
 			}
 		})
+	}
+}
+
+func TestResourceCollectionSemanticNamesConsumeSharedBudget(t *testing.T) {
+	for _, expression := range []*SemanticConditionExpression{
+		{Operator: "ref", Selector: "selection"},
+		{Operator: "quantifier", Quantifier: "all", Pattern: "them"},
+	} {
+		limits := defaultParseLimits()
+		limits.outputBytes = 1
+		result := guardedWithLimits(context.Background(), "", limits, func(b *parseBudget) *SemanticQuery {
+			scopeSemanticCondition(expression, "rule1_", b)
+			return &SemanticQuery{ConditionExpression: expression}
+		}, func(message string) *SemanticQuery { return &SemanticQuery{Errors: []string{message}} })
+		if !strings.Contains(strings.Join(result.Errors, " "), "output bytes") || result.ConditionExpression != nil {
+			t.Fatalf("collection names escaped shared budget or exposed partial selectors: %+v", result)
+		}
 	}
 }
