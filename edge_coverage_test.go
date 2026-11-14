@@ -177,8 +177,8 @@ func TestDetectionResolutionEdgeBranches(t *testing.T) {
 		t.Fatalf("plain value should be a keyword, item=%+v errors=%v", item, errs)
 	}
 
-	if expr, isKeyword, errs := resolveList(nil); expr != nil || isKeyword || len(errs) != 0 {
-		t.Fatalf("empty list should be non-keyword empty, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
+	if expr, isKeyword, errs := resolveList(nil); expr != nil || isKeyword || len(errs) == 0 {
+		t.Fatalf("empty list should diagnose, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
 	}
 	expr, isKeyword, errs := resolveList([]any{orderedMap{{key: "Image", value: "cmd.exe"}}, "not-a-map"})
 	if len(expressionLeaves(expr)) != 1 || isKeyword || len(errs) == 0 {
@@ -203,11 +203,11 @@ func TestDetectionResolutionEdgeBranches(t *testing.T) {
 	if len(errs) != 0 || mapExpr.Kind != ExpressionAnd || len(mapExpr.Children) != 2 || mapExpr.Children[0].Condition.Field != "A" {
 		t.Fatalf("expected map fields ANDed in authored order, expr=%#v errors=%v", mapExpr, errs)
 	}
-	if leaves := expressionLeaves(mustFieldExpression(t, "Field|exists", []any{})); len(leaves) != 1 || leaves[0].Operator != "exists" || leaves[0].Value != "false" {
-		t.Fatalf("empty exists modifier list should coerce like null, got %+v", leaves)
+	if expr, _, errs := fieldExpression("Field|exists", []any{}); expr != nil || len(errs) == 0 {
+		t.Fatalf("empty exists modifier list must diagnose, expr=%#v errors=%v", expr, errs)
 	}
-	if leaves := expressionLeaves(mustFieldExpression(t, "Field|exists", []any{"no"})); len(leaves) != 1 || leaves[0].Value != "false" {
-		t.Fatalf("exists no should become false, got %+v", leaves)
+	if expr, _, errs := fieldExpression("Field|exists", []any{"no"}); expr != nil || len(errs) == 0 {
+		t.Fatalf("textual exists value must diagnose, expr=%#v errors=%v", expr, errs)
 	}
 	if _, _, errs := fieldExpression("Field|unknown", "value"); len(errs) == 0 {
 		t.Fatal("unsupported modifier should return diagnostics")

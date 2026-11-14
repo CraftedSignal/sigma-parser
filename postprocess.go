@@ -61,16 +61,16 @@ var comparisonOperators = map[string]bool{">": true, ">=": true, "<": true, "<="
 // connection in the legacy flat projection, not part of a predicate's identity.
 // Field casing retains the existing expression/flat caller policies.
 type conditionIdentity struct {
-	Field, Operator, ValueReference, DatePart, SourceField                   string
-	Negated, CaseSensitive, Multiline, DotAll, RequiresExpansion, IsComputed bool
-	PipeStage                                                                int
+	Field, Operator, ValueReference, DatePart, SourceField                             string
+	Negated, CaseSensitive, Multiline, DotAll, RequiresExpansion, IsComputed, NullTest bool
+	PipeStage                                                                          int
 }
 
 func metadataIdentity(c Condition) conditionIdentity {
 	return conditionIdentity{Field: c.Field, Operator: c.Operator, ValueReference: c.ValueReference,
 		DatePart: c.DatePart, SourceField: c.SourceField, Negated: c.Negated,
 		CaseSensitive: c.CaseSensitive, Multiline: c.Multiline, DotAll: c.DotAll,
-		RequiresExpansion: c.RequiresExpansion, IsComputed: c.IsComputed, PipeStage: c.PipeStage}
+		RequiresExpansion: c.RequiresExpansion, IsComputed: c.IsComputed, NullTest: c.NullTest, PipeStage: c.PipeStage}
 }
 
 func sameConditionGroup(a, b Condition) bool {

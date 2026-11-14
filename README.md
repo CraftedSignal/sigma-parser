@@ -90,6 +90,10 @@ detection:
 `
 
 result := sigma.ExtractConditions(rule)
+
+if len(result.Errors) > 0 {
+    // Reject or report the invalid rule before consuming its conditions.
+}
 fmt.Println(result.GroupByFields) // [SourceIP]
 fmt.Println(result.Commands)      // [count]
 ```
@@ -116,6 +120,30 @@ fmt.Println(result.Commands)      // [count]
 | Rule collections (action global/reset/repeat) | Supported; `ExtractFile` returns each rule |
 | Correlation rules, v2.1.0 (all types, aliases, chaining) | Supported; `ExtractFile` resolves references by name or id within the file |
 | Warnings | `Warnings` flags exact command-line values that can only be a parameter, such as `CommandLine: -NoProfile` |
+
+`ParseResult.Expression` and `SemanticQuery.Expression` carry the resolved
+Boolean groups, including OR between maps in a list and whole-group NOT.
+`Conditions` and `SemanticDetection.Conditions` are legacy flat projections;
+their `LogicalOp` fields cannot reconstruct arbitrary grouping. Consumers that
+need the full detection logic should use the root expression.
+
+An authored `Field: null` sets `Condition.NullTest` in both expressions and
+flat conditions. This flag is authoritative: it denotes a symbolic Sigma null
+test for a target to lower. For compatibility, its `Operator` remains `exists`
+and `Value` remains `false`; explicit `Field|exists: false` has the same legacy
+fields with `NullTest == false`. The parser does not choose target-specific
+null matching behavior. An empty string remains an ordinary equality value.
+
+Modifier input is checked before scalar conversion. `exists` takes a YAML
+Boolean and requires a field; regex, CIDR, field references, `expand`, and
+string transformations take authored strings. Generic `contains`,
+`startswith`, `endswith`, and `cased` still accept numeric scalars. `all`
+requires an authored nonempty list, including a singleton list; duplicate
+removal does not change that rule. Field references reject unescaped wildcard
+patterns and resolve escaped literal `*`, `?`, and backslashes. Empty
+selections, empty field-value lists, and null elements in field-value lists
+produce diagnostics in `Errors`. Invalid ordinary entries can leave other
+valid entries in a partial result, so callers should check `Errors`.
 
 ## Resource bounds and cancellation
 
@@ -169,6 +197,7 @@ type Condition struct {
     Field        string   // Field name (empty for keywords)
     Operator     string   // "=", "contains", "startswith", "endswith", "matches", "cidrmatch", etc.
     Value        string   // The condition value
+    NullTest     bool     // Authoritative symbolic Sigma null test
     Negated      bool     // True if condition is negated (NOT)
     LogicalOp    string   // "AND" or "OR" connecting to previous condition
     Alternatives []string // Multiple values grouped by OR on same field
@@ -176,6 +205,7 @@ type Condition struct {
 
 type ParseResult struct {
     Conditions     []Condition
+    Expression     *Expression     // Complete resolved Boolean logic
     GroupByFields  []string          // From aggregation group-by
     ComputedFields map[string]string // Always empty for Sigma
     Commands       []string          // Aggregation functions detected
