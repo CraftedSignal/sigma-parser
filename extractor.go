@@ -26,14 +26,17 @@ func ExtractConditions(yamlContent string) *ParseResult {
 // reporting either through failed.
 func guarded[T any](yamlContent string, extract func() T, failed func(message string) T) T {
 	done := make(chan T, 1)
+	// A timed-out worker may start after the caller has restored the test
+	// hook. Capture it before launching rather than reading shared test state.
+	hook := extractHook
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				done <- failed(fmt.Sprintf("panic during parsing: %v", r))
 			}
 		}()
-		if extractHook != nil {
-			extractHook(yamlContent)
+		if hook != nil {
+			hook(yamlContent)
 		}
 		done <- extract()
 	}()
