@@ -144,6 +144,7 @@ func TestCorpus_NoPanics(t *testing.T) {
 		if result == nil {
 			panics++
 			t.Errorf("nil result for %s", path)
+			continue
 		}
 		for _, e := range result.Errors {
 			if strings.Contains(e, "panic") {
