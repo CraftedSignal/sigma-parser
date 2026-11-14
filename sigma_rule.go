@@ -60,24 +60,6 @@ func parseSigmaRules(yamlContent string) ([]*sigmaRule, error) {
 	return rules, nil
 }
 
-// parseSigmaRule parses a rule file as one rule. A collection's rules match
-// together, so their detections are ORed; the log source is kept only when
-// all rules share it.
-func parseSigmaRule(yamlContent string) (*sigmaRule, error) {
-	rules, err := parseSigmaRules(yamlContent)
-	if err != nil {
-		return nil, err
-	}
-	rule := rules[0]
-	for _, next := range rules[1:] {
-		rule.Detection = orDetections(rule.Detection, next.Detection)
-		if next.LogSource != rule.LogSource {
-			rule.LogSource = logSource{}
-		}
-	}
-	return rule, nil
-}
-
 func yamlDocuments(content string) ([]orderedMap, error) {
 	decoder := yaml.NewDecoder(strings.NewReader(content))
 	var documents []orderedMap
@@ -185,81 +167,4 @@ func documentString(document orderedMap, key string) string {
 		return ""
 	}
 	return fmt.Sprintf("%v", value)
-}
-
-// orDetections combines the detections of two collection rules into one
-// that matches either: the second rule's search identifiers are renamed so
-// they cannot collide, and the conditions are ORed.
-func orDetections(first, second orderedMap) orderedMap {
-	firstCondition, _ := first.get("condition")
-	secondCondition, _ := second.get("condition")
-	prefix := uniquePrefix(first)
-	renames := make(map[string]string, len(second))
-	out := first.without("condition")
-	for _, entry := range second {
-		switch strings.ToLower(entry.key) {
-		case "condition", "timeframe":
-			continue
-		}
-		renames[entry.key] = prefix + entry.key
-		out = append(out, mapEntry{key: prefix + entry.key, value: entry.value})
-	}
-	condition := "(" + conditionText(firstCondition) + ") or (" + renameIdentifiers(conditionText(secondCondition), renames, prefix) + ")"
-	return append(out, mapEntry{key: "condition", value: condition})
-}
-
-func uniquePrefix(detection orderedMap) string {
-	for n := 1; ; n++ {
-		prefix := fmt.Sprintf("rule%d_", n)
-		clash := false
-		for _, entry := range detection {
-			if strings.HasPrefix(entry.key, prefix) {
-				clash = true
-				break
-			}
-		}
-		if !clash {
-			return prefix
-		}
-	}
-}
-
-func conditionText(condition any) string {
-	if list, ok := condition.([]any); ok {
-		parts := make([]string, len(list))
-		for i, item := range list {
-			parts[i] = "(" + fmt.Sprintf("%v", item) + ")"
-		}
-		return strings.Join(parts, " or ")
-	}
-	return fmt.Sprintf("%v", condition)
-}
-
-// renameIdentifiers rewrites the search identifiers and selector patterns
-// of a condition to their renamed form.
-func renameIdentifiers(condition string, renames map[string]string, prefix string) string {
-	lexer := newConditionLexer(condition)
-	lexer.tokenize()
-	var out strings.Builder
-	last := 0
-	for i, tok := range lexer.tokens {
-		if tok.typ != tokIdent {
-			continue
-		}
-		previousIsOf := i > 0 && lexer.tokens[i-1].typ == tokOf
-		renamed, known := renames[tok.val]
-		switch {
-		case known:
-		case previousIsOf:
-			// A selector pattern such as selection_* matches renamed names.
-			renamed = prefix + tok.val
-		default:
-			continue
-		}
-		out.WriteString(condition[last:tok.pos])
-		out.WriteString(renamed)
-		last = tok.pos + len(tok.val)
-	}
-	out.WriteString(condition[last:])
-	return out.String()
 }

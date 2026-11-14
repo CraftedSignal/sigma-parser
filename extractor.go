@@ -48,11 +48,42 @@ func guarded[T any](yamlContent string, extract func() T, failed func(message st
 
 // extractConditionsInternal does the actual parsing work.
 func extractConditionsInternal(yamlContent string) *ParseResult {
-	rule, err := parseSigmaRule(yamlContent)
+	rules, err := parseSigmaRules(yamlContent)
 	if err != nil {
 		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}
 	}
-	return extractRule(rule)
+	result := extractRule(rules[0])
+	if len(rules) == 1 {
+		return result
+	}
+	// Resolve each condition against its own detection block before ORing the
+	// expressions. A collection must never expand one rule's selector into
+	// another rule's selections (including private underscore selections).
+	expressions := []*Expression{result.Expression}
+	for _, rule := range rules[1:] {
+		next := extractRule(rule)
+		expressions = append(expressions, next.Expression)
+		if rule.LogSource != rules[0].LogSource {
+			result.LogSource = nil
+		}
+		if len(next.Conditions) > 0 {
+			next.Conditions[0].LogicalOp = "OR"
+		}
+		result.Conditions = append(result.Conditions, next.Conditions...)
+		result.GroupByFields = append(result.GroupByFields, next.GroupByFields...)
+		result.Commands = append(result.Commands, next.Commands...)
+		result.Errors = append(result.Errors, next.Errors...)
+		result.Warnings = append(result.Warnings, next.Warnings...)
+	}
+	var children []*Expression
+	for _, expression := range expressions {
+		if expression != nil {
+			children = append(children, expression)
+		}
+	}
+	result.Expression = compactExpression(ExpressionOr, children)
+	result.Conditions = deduplicateConditions(groupORConditions(result.Conditions))
+	return result
 }
 
 // extractRule extracts the conditions of one parsed rule.
