@@ -407,7 +407,7 @@ func orExpression(leaves []Condition, budgets ...*parseBudget) *Expression {
 	b := budgetFrom(budgets)
 	b.node(2 * len(leaves))
 	merged := make([]Condition, 0, len(leaves))
-	index := make(map[string]int, len(leaves))
+	index := make(map[conditionIdentity]int, len(leaves))
 	values := make(map[int]map[string]bool)
 	for _, leaf := range leaves {
 		b.step(len(leaf.Field) + len(leaf.Value) + 1)
@@ -448,15 +448,11 @@ func orExpression(leaves []Condition, budgets ...*parseBudget) *Expression {
 
 // alternativeKey identifies conditions whose values can share one condition;
 // comparisons, existence checks and field references stay separate.
-func alternativeKey(c Condition) (string, bool) {
-	switch c.Operator {
-	case ">", ">=", "<", "<=", "exists":
-		return "", false
+func alternativeKey(c Condition) (conditionIdentity, bool) {
+	if comparisonOperators[c.Operator] || c.Operator == "exists" || c.ValueReference != "" {
+		return conditionIdentity{}, false
 	}
-	if c.ValueReference != "" {
-		return "", false
-	}
-	return fmt.Sprintf("%s\x00%s\x00%t\x00%t\x00%t\x00%t\x00%s", c.Field, c.Operator, c.CaseSensitive, c.Multiline, c.DotAll, c.RequiresExpansion, c.DatePart), true
+	return metadataIdentity(c), true
 }
 
 func leafExpression(condition Condition) *Expression {
