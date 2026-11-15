@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var timeframeNumericTextRe = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
 // sigmaRule is the internal representation of a parsed Sigma YAML rule.
 type sigmaRule struct {
@@ -159,8 +162,22 @@ func ruleFromDocument(document orderedMap, budgets ...*parseBudget) (*sigmaRule,
 		return nil, fmt.Errorf("sigma rule missing 'detection.condition'")
 	}
 	if timeframe, present := rule.Detection.get("timeframe"); present {
-		if _, ok := timeframe.(string); !ok {
+		text, ok := timeframe.(string)
+		if !ok {
 			const diagnostic = "sigma rule 'detection.timeframe' must be a string"
+			b.output(len(diagnostic))
+			return nil, errors.New(diagnostic)
+		}
+		b.step(len(text)) // Account for the trim scan before inspecting the string.
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			const diagnostic = "sigma rule 'detection.timeframe' must not be empty"
+			b.output(len(diagnostic))
+			return nil, errors.New(diagnostic)
+		}
+		b.step(len(trimmed)) // Account for complete numeric recognition before matching.
+		if timeframeNumericTextRe.MatchString(trimmed) {
+			const diagnostic = "sigma rule 'detection.timeframe' must include a time unit"
 			b.output(len(diagnostic))
 			return nil, errors.New(diagnostic)
 		}
