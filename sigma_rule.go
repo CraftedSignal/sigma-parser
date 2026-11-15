@@ -158,6 +158,13 @@ func ruleFromDocument(document orderedMap, budgets ...*parseBudget) (*sigmaRule,
 	if _, ok := rule.Detection.get("condition"); !ok {
 		return nil, fmt.Errorf("sigma rule missing 'detection.condition'")
 	}
+	if timeframe, present := rule.Detection.get("timeframe"); present {
+		if _, ok := timeframe.(string); !ok {
+			const diagnostic = "sigma rule 'detection.timeframe' must be a string"
+			b.output(len(diagnostic))
+			return nil, errors.New(diagnostic)
+		}
+	}
 	rule.Title = documentString(document, "title", b)
 	rule.ID = documentString(document, "id", b)
 	rule.Name = documentString(document, "name", b)
