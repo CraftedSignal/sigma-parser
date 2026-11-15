@@ -98,6 +98,12 @@ fmt.Println(result.GroupByFields) // [SourceIP]
 fmt.Println(result.Commands)      // [count]
 ```
 
+When present, `detection.timeframe` must be a YAML string. Non-string values
+produce a parse error in `Errors`. Blank strings and strings containing only a
+decimal number (including signed, fractional, and exponent forms) also produce
+an error because they supply no time unit. Other strings are preserved as
+authored; the parser does not fully validate duration syntax.
+
 ## Supported Sigma Features
 
 | Feature | Status |
