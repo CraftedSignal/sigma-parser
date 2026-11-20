@@ -136,10 +136,11 @@ func (l *conditionLexer) readString(quote byte) {
 		}
 		l.pos++
 	}
+	end := min(l.pos, len(l.input)) // an unterminated string runs to the end
 	if l.pos < len(l.input) {
 		l.pos++ // skip closing quote
 	}
-	val := l.input[start+1 : l.pos-1]
+	val := l.input[start+1 : end]
 	l.tokens = append(l.tokens, token{tokString, val, start})
 }
 
