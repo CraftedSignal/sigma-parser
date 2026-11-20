@@ -17,6 +17,7 @@ const (
 	tokRParen                  // ")"
 	tokPipe                    // "|"
 	tokNumber                  // integer literal
+	tokFloat                   // other number, such as 0.5 or 1e3
 	tokGT                      // ">"
 	tokGTE                     // ">="
 	tokLT                      // "<"
@@ -143,15 +144,17 @@ func (l *conditionLexer) readString(quote byte) {
 	l.tokens = append(l.tokens, token{tokString, val, start})
 }
 
+// readNumber reads a word that starts with a digit whole: an integer, another
+// number such as 0.5 or 1e3, or otherwise an identifier such as 1st or 4688_a.
 func (l *conditionLexer) readNumber() {
-	start := l.pos
-	for l.pos < len(l.input) && unicode.IsDigit(rune(l.input[l.pos])) {
-		if l.budget != nil {
-			l.budget.step(1)
-		}
-		l.pos++
+	l.readIdentOrKeyword() // no keyword starts with a digit
+	word := &l.tokens[len(l.tokens)-1]
+	switch {
+	case strings.Trim(word.val, "0123456789") == "":
+		word.typ = tokNumber
+	case numericTextRe.MatchString(word.val):
+		word.typ = tokFloat
 	}
-	l.tokens = append(l.tokens, token{tokNumber, l.input[start:l.pos], start})
 }
 
 func (l *conditionLexer) readIdentOrKeyword() {

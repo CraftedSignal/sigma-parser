@@ -133,7 +133,7 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	}
 
 	// Parse threshold value
-	if peek().typ == tokNumber {
+	if typ := peek().typ; typ == tokNumber || typ == tokFloat {
 		agg.threshold = advance().val
 	}
 
