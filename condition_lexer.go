@@ -3,6 +3,7 @@ package sigma
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // tokenType represents the type of a lexer token.
@@ -64,10 +65,12 @@ func (l *conditionLexer) tokenize() {
 			l.budget.node(1)
 		}
 		ch := l.input[l.pos]
+		// Operators and digits are ASCII bytes; a letter may span several.
+		r, width := utf8.DecodeRuneInString(l.input[l.pos:])
 
 		// Skip whitespace
-		if unicode.IsSpace(rune(ch)) {
-			l.pos++
+		if unicode.IsSpace(r) {
+			l.pos += width
 			continue
 		}
 
@@ -113,7 +116,7 @@ func (l *conditionLexer) tokenize() {
 		default:
 			if unicode.IsDigit(rune(ch)) {
 				l.readNumber()
-			} else if isIdentChar(rune(ch)) {
+			} else if isIdentChar(r) {
 				l.readIdentOrKeyword()
 			} else {
 				// Skip unknown characters
@@ -156,11 +159,15 @@ func (l *conditionLexer) readNumber() {
 
 func (l *conditionLexer) readIdentOrKeyword() {
 	start := l.pos
-	for l.pos < len(l.input) && isIdentChar(rune(l.input[l.pos])) {
+	for l.pos < len(l.input) {
+		r, width := utf8.DecodeRuneInString(l.input[l.pos:])
+		if !isIdentChar(r) {
+			break
+		}
 		if l.budget != nil {
 			l.budget.step(1)
 		}
-		l.pos++
+		l.pos += width
 	}
 	word := l.input[start:l.pos]
 	lower := strings.ToLower(word)
