@@ -342,14 +342,17 @@ func resolveReferences(nodes []*fileNode, budgets ...*parseBudget) []string {
 			target.referenced = true
 			c.Rules = append(c.Rules, CorrelationRule{Name: target.key(), Rule: target.rule, Correlation: target.correlation})
 		}
+		var aliasErrs []string
 		for alias, fields := range c.Aliases {
 			for rule := range fields {
 				b.step(len(c.Rules) + 1)
 				if !slices.ContainsFunc(c.Rules, func(r CorrelationRule) bool { return r.Name == rule }) {
-					errs = append(errs, b.formatError("correlation %q: alias %q maps rule %q, which the correlation does not reference", n.key(), alias, rule))
+					aliasErrs = append(aliasErrs, b.formatError("correlation %q: alias %q maps rule %q, which the correlation does not reference", n.key(), alias, rule))
 				}
 			}
 		}
+		slices.Sort(aliasErrs) // by alias and rule, not in the map's random order
+		errs = append(errs, aliasErrs...)
 	}
 	for _, n := range nodes {
 		if n.correlation != nil && referencesItself(n.correlation, n.correlation, map[*Correlation]bool{}, b) {
