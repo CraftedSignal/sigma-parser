@@ -73,10 +73,13 @@ func metadataIdentity(c Condition) conditionIdentity {
 		RequiresExpansion: c.RequiresExpansion, IsComputed: c.IsComputed, NullTest: c.NullTest, PipeStage: c.PipeStage}
 }
 
+// sameConditionGroup reports whether b, linked to a by OR, can join a's
+// Alternatives. A negated condition's Alternatives mean that none of them
+// match, so NOT x OR NOT y cannot become one negated condition.
 func sameConditionGroup(a, b Condition) bool {
 	ak, aok := alternativeKey(a)
 	bk, bok := alternativeKey(b)
-	if !aok || !bok || !strings.EqualFold(ak.Field, bk.Field) {
+	if !aok || !bok || a.Negated || !strings.EqualFold(ak.Field, bk.Field) {
 		return false
 	}
 	ak.Field, bk.Field = "", ""
