@@ -53,6 +53,9 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	pos := 0
 
 	peek := func() token {
+		if pos >= len(tokens) {
+			return token{typ: tokEOF}
+		}
 		return tokens[pos]
 	}
 	advance := func() token {

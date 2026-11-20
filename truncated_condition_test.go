@@ -19,3 +19,16 @@ func TestConditionEndingInAQuoteIsAnError(t *testing.T) {
 		}
 	}
 }
+
+// An aggregation that ends after its opening parenthesis is an error. It used
+// to panic, and in ExtractFile the recovered panic lost every other rule of
+// the file.
+func TestAggregationEndingAfterParenthesisIsAnError(t *testing.T) {
+	file := ExtractFile("title: good\ndetection:\n  sel: {A: 1}\n  condition: sel\n---\ntitle: bad\ndetection:\n  sel: {A: 1}\n  condition: sel | count(\n")
+	if len(file.Errors) != 1 || file.Errors[0] != `rule "bad": expected closing parenthesis in aggregation` {
+		t.Fatalf("errors %q", file.Errors)
+	}
+	if len(file.Rules) != 2 || file.Rules[0].Title != "good" || len(file.Rules[0].Errors) > 0 || len(expressionLeaves(file.Rules[0].Expression)) != 1 {
+		t.Fatalf("the good rule was not kept: %d rules", len(file.Rules))
+	}
+}
