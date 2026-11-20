@@ -47,6 +47,7 @@ type conditionLexer struct {
 	input  string
 	pos    int
 	tokens []token
+	errors []string // characters the condition grammar does not know
 }
 
 // newConditionLexer creates a lexer and tokenizes the input.
@@ -119,8 +120,8 @@ func (l *conditionLexer) tokenize() {
 			} else if isIdentChar(r) {
 				l.readIdentOrKeyword()
 			} else {
-				// Skip unknown characters
-				l.pos++
+				l.errors = append(l.errors, l.budget.formatError("unexpected character %q in condition", l.input[start:start+width]))
+				l.pos += width
 			}
 		}
 	}

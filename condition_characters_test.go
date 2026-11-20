@@ -35,3 +35,30 @@ func TestConditionReadsNonASCIIIdentifiers(t *testing.T) {
 		t.Fatalf("1 of sé* without a matching selection: errors %q, title %q", result.Errors, result.Title)
 	}
 }
+
+// A character the condition grammar does not know is an error, reported
+// once, in the search and in the aggregation after the pipe. It used to be
+// skipped: sel and !filter read as sel and filter, and count() != 3 as
+// count() = 3.
+func TestConditionRejectsUnknownCharacters(t *testing.T) {
+	for _, tc := range []struct{ condition, character string }{
+		{"sel and !filter", "!"},
+		{"sel and ~filter", "~"},
+		{"sel and [filter]", "["},
+		{"sel and [filter]", "]"},
+		{"sel and ¬filter", "¬"},
+		{"sel | count() by src_ip != 3", "!"},
+	} {
+		result := ExtractConditions("title: t\ndetection:\n  sel: {A: 1}\n  filter: {B: 1}\n  condition: " + tc.condition + "\n")
+		want := `unexpected character "` + tc.character + `" in condition`
+		reported := 0
+		for _, err := range result.Errors {
+			if strings.Contains(err, want) {
+				reported++
+			}
+		}
+		if reported != 1 {
+			t.Errorf("%s: %q reported %d times, errors %q", tc.condition, tc.character, reported, result.Errors)
+		}
+	}
+}
