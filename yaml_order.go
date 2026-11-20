@@ -2,6 +2,8 @@ package sigma
 
 import (
 	"fmt"
+	"math/big"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,7 +30,8 @@ func (m orderedMap) get(key string) (any, bool) {
 
 // decodeOrdered converts a YAML node into plain Go values, decoding mappings
 // as orderedMap. Timestamps keep their source text: a detection value such as
-// 2024-01-02 is a string to match, not a time.
+// 2024-01-02 is a string to match, not a time. An integer too large for
+// int64 and uint64 is a *big.Int, as yaml.v3's float64 would lose digits.
 func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
 	b := budgetFrom(budgets)
 	defer b.visitYAML(node)()
@@ -69,6 +72,11 @@ func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
 	default:
 		if node.Tag == "!!timestamp" {
 			return node.Value, nil
+		}
+		if node.Tag == "!!float" && node.Style == 0 {
+			if integer, ok := new(big.Int).SetString(strings.ReplaceAll(node.Value, "_", ""), 10); ok {
+				return integer, nil
+			}
 		}
 		var value any
 		if err := node.Decode(&value); err != nil {

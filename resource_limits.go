@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -147,6 +148,8 @@ func (b *parseBudget) reserveValue(value any) {
 			b.output(1)
 			b.reserveValue(item)
 		}
+	case *big.Int:
+		b.output(v.BitLen()/3 + 2) // a sign and at most one digit per three bits
 	default:
 		b.output(32)
 	}
