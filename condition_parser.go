@@ -240,9 +240,7 @@ func evaluateAST(node condNode, items map[string]*detectionItem, negated bool, b
 		conds := make([]Condition, len(item.conditions))
 		copy(conds, item.conditions)
 		if negated {
-			for i := range conds {
-				conds[i].Negated = !conds[i].Negated
-			}
+			negateConditions(conds)
 		}
 		return conds
 
@@ -310,9 +308,7 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 		copy(conds, item.conditions)
 
 		if negated {
-			for j := range conds {
-				conds[j].Negated = !conds[j].Negated
-			}
+			negateConditions(conds)
 		}
 
 		// Connect items: "all of" → AND, "1 of" / "N of" → OR.
@@ -329,6 +325,21 @@ func evaluateQuantifier(q condNodeQuantifier, items map[string]*detectionItem, n
 	}
 
 	return result
+}
+
+// negateConditions negates a selection's flat conditions with De Morgan's
+// laws, as flattenExpression does under NOT: each condition flips Negated
+// and each AND or OR linking it to the previous condition swaps.
+func negateConditions(conditions []Condition) {
+	for i := range conditions {
+		conditions[i].Negated = !conditions[i].Negated
+		switch conditions[i].LogicalOp {
+		case "AND":
+			conditions[i].LogicalOp = "OR"
+		case "OR":
+			conditions[i].LogicalOp = "AND"
+		}
+	}
 }
 
 // matchDetectionItems returns detection item names matching a pattern, sorted
