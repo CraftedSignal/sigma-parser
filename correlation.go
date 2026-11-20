@@ -401,6 +401,9 @@ func nearCorrelation(rule *sigmaRule, result *ParseResult, budgets ...*parseBudg
 	b := budgetFrom(budgets)
 	b.step(1)
 	condition, _ := rule.Detection.get("condition")
+	if list, ok := condition.([]any); ok && len(list) == 1 {
+		condition = list[0] // a one-element list is that condition
+	}
 	text, _ := condition.(string)
 	anchor, aggregation, found := strings.Cut(text, "|")
 	aggregation = strings.TrimSpace(aggregation)
