@@ -59,8 +59,9 @@ type conditionParser struct {
 // plus any aggregation expression (text after |).
 func parseConditionExpr(condStr string, budgets ...*parseBudget) (condNode, string, []string) {
 	b := budgetFrom(budgets)
+	// The lexer reads the aggregation after | too, and reports its characters.
 	lexer := newConditionLexer(condStr, b)
-	p := &conditionParser{tokens: lexer.tokens, budget: b}
+	p := &conditionParser{tokens: lexer.tokens, budget: b, errors: lexer.errors}
 	node := p.parseOr()
 	if next := p.peek(); next.typ != tokEOF && next.typ != tokPipe {
 		p.errors = append(p.errors, b.formatError("unexpected token after condition expression: %q", next.val))

@@ -47,7 +47,8 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	var errors []string
 	agg := &aggregation{}
 
-	// Tokenize for aggregation parsing
+	// Tokenize for aggregation parsing; parseConditionExpr already reported
+	// the characters the lexer does not know.
 	lexer := newConditionLexer(expr, b)
 	tokens := lexer.tokens
 	pos := 0
