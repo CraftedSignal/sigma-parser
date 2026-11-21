@@ -3,6 +3,7 @@ package sigma
 import (
 	"encoding/base64"
 	"fmt"
+	"math/big"
 	"net"
 	"strconv"
 	"strings"
@@ -529,7 +530,7 @@ func formatScalar(value any) string {
 
 func isNumber(value any) bool {
 	switch v := value.(type) {
-	case int, int64, uint64, float64:
+	case int, int64, uint64, float64, *big.Int:
 		return true
 	case string:
 		_, err := strconv.ParseFloat(strings.TrimSpace(v), 64)

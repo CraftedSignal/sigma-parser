@@ -3,6 +3,7 @@ package sigma
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"regexp"
 	"slices"
 	"strings"
@@ -520,6 +521,9 @@ func number(value any) (float64, bool) {
 		return float64(v), true
 	case float64:
 		return v, true
+	case *big.Int:
+		f, _ := v.Float64()
+		return f, true
 	}
 	return 0, false
 }
