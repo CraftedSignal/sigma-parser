@@ -1,0 +1,51 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-checks:
+    name: Validate Go checks
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  validate-conformance:
+    name: Validate SigmaHQ conformance
+    uses: ./.github/workflows/sigmahq-conformance.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: [validate-checks, validate-conformance]
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.11'
+          cache: false
+
+      - name: Semantic Release
+        uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          changelog-generator-opt: "emojis=true"
+          allow-initial-development-versions: true
