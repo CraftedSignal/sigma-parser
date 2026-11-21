@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -181,7 +182,8 @@ func fieldExpression(fieldWithMods string, raw any, budgets ...*parseBudget) (*E
 
 	var units []*Expression
 	var leaves []Condition
-	seen := make(map[string]bool, len(values))
+	b.node(len(values)) // typed deduplication entries, before map allocation
+	seen := make(map[scalarIdentity]bool, len(values))
 	for _, value := range values {
 		b.step(1)
 		if isList && value == nil {
@@ -193,7 +195,9 @@ func fieldExpression(fieldWithMods string, raw any, budgets ...*parseBudget) (*E
 			continue
 		}
 		// A repeated value adds nothing to an OR or an AND.
-		if key := formatScalar(value); seen[key] {
+		numberText := spec.numericOperandText(value)
+		b.step(len(numberText))
+		if key := scalarKey(value, numberText); seen[key] {
 			continue
 		} else {
 			seen[key] = true
@@ -263,6 +267,23 @@ func (spec fieldSpec) validateValue(value any) string {
 	return ""
 }
 
+// numericOperandText applies only while the operand retains numeric meaning.
+// Position/string transformations and unfielded keyword searches consume text.
+func (spec fieldSpec) numericOperandText(value any) string {
+	if spec.field != "" && (spec.kind == kindCompare || (spec.kind == kindString && len(spec.steps) == 0)) {
+		if number, ok := value.(numberScalar); ok {
+			if number.nonfinite {
+				const diagnostic = "non-finite YAML number cannot be represented as a numeric operand"
+				budgetFrom([]*parseBudget{spec.budget}).output(len(diagnostic))
+				// Abort the request, rather than leaving other selectors as partial data.
+				panic(parseAbort{errors.New(diagnostic)})
+			}
+			return number.text
+		}
+	}
+	return ""
+}
+
 // valueLeaves turns one validated detection value into the conditions it ORs.
 func (spec fieldSpec) valueLeaves(value any) (leaves []Condition, errs []string) {
 	b := budgetFrom([]*parseBudget{spec.budget})
@@ -272,6 +293,7 @@ func (spec fieldSpec) valueLeaves(value any) (leaves []Condition, errs []string)
 		return []Condition{{Field: spec.field, Operator: "exists", Value: "false", NullTest: true}}, nil
 	}
 	base := Condition{Field: spec.field, CaseSensitive: spec.cased, RequiresExpansion: spec.expand, DatePart: spec.datePart}
+	base.NumberText = spec.numericOperandText(value)
 	text := formatScalar(value)
 	b.step(len(text))
 	b.output(len(text))
@@ -499,7 +521,7 @@ func orExpression(leaves []Condition, budgets ...*parseBudget) *Expression {
 // alternativeKey identifies conditions whose values can share one condition;
 // comparisons, existence checks and field references stay separate.
 func alternativeKey(c Condition) (conditionIdentity, bool) {
-	if comparisonOperators[c.Operator] || c.Operator == "exists" || c.ValueReference != "" {
+	if c.NumberText != "" || comparisonOperators[c.Operator] || c.Operator == "exists" || c.ValueReference != "" {
 		return conditionIdentity{}, false
 	}
 	return metadataIdentity(c), true
@@ -519,6 +541,8 @@ func negateIf(expression *Expression, negate bool) *Expression {
 // formatScalar renders a YAML scalar as Sigma matches it.
 func formatScalar(value any) string {
 	switch v := value.(type) {
+	case numberScalar:
+		return v.legacy
 	case string:
 		return v
 	case float64:
@@ -530,7 +554,7 @@ func formatScalar(value any) string {
 
 func isNumber(value any) bool {
 	switch v := value.(type) {
-	case int, int64, uint64, float64, *big.Int:
+	case numberScalar, int, int64, uint64, float64, *big.Int:
 		return true
 	case string:
 		_, err := strconv.ParseFloat(strings.TrimSpace(v), 64)

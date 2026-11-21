@@ -147,15 +147,7 @@ detection:
     condition: selection
 `,
 		validate: func(t *testing.T, r *ParseResult) {
-			found := false
-			for _, c := range r.Conditions {
-				if c.Field == "EventID" && len(c.Alternatives) == 3 {
-					found = true
-				}
-			}
-			if !found {
-				t.Error("expected EventID with 3 alternatives")
-			}
+			assertNumericORLeaves(t, r, "EventID", []string{"5001", "5010", "5012"}, []string{"5001", "501e1", "5012"})
 		},
 	},
 	{
@@ -239,15 +231,7 @@ detection:
     condition: selection
 `,
 		validate: func(t *testing.T, r *ParseResult) {
-			foundPort := false
-			for _, c := range r.Conditions {
-				if c.Field == "DestinationPort" && len(c.Alternatives) > 0 {
-					foundPort = true
-				}
-			}
-			if !foundPort {
-				t.Error("expected DestinationPort with alternatives")
-			}
+			assertNumericORLeaves(t, r, "DestinationPort", []string{"4444", "5555", "1337", "31337"}, []string{"4444", "5555", "1337", "31337"})
 		},
 	},
 	{

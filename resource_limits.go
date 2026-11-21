@@ -105,9 +105,10 @@ func (b *parseBudget) enter() func() {
 }
 
 func (b *parseBudget) copyCondition(c Condition) {
+	b.step(len(c.NumberText))
 	b.condition(1)
 	b.node(1 + len(c.Alternatives))
-	b.output(len(c.Field) + len(c.Operator) + len(c.Value) + len(c.ValueReference) + len(c.SourceField))
+	b.output(len(c.NumberText) + len(c.Field) + len(c.Operator) + len(c.Value) + len(c.ValueReference) + len(c.SourceField))
 	for _, value := range c.Alternatives {
 		b.output(len(value))
 	}
