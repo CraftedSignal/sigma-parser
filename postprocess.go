@@ -61,13 +61,13 @@ var comparisonOperators = map[string]bool{">": true, ">=": true, "<": true, "<="
 // connection in the legacy flat projection, not part of a predicate's identity.
 // Field casing retains the existing expression/flat caller policies.
 type conditionIdentity struct {
-	Field, Operator, ValueReference, DatePart, SourceField                             string
+	Field, Operator, ValueReference, DatePart, SourceField, NumberText                 string
 	Negated, CaseSensitive, Multiline, DotAll, RequiresExpansion, IsComputed, NullTest bool
 	PipeStage                                                                          int
 }
 
 func metadataIdentity(c Condition) conditionIdentity {
-	return conditionIdentity{Field: c.Field, Operator: c.Operator, ValueReference: c.ValueReference,
+	return conditionIdentity{NumberText: c.NumberText, Field: c.Field, Operator: c.Operator, ValueReference: c.ValueReference,
 		DatePart: c.DatePart, SourceField: c.SourceField, Negated: c.Negated,
 		CaseSensitive: c.CaseSensitive, Multiline: c.Multiline, DotAll: c.DotAll,
 		RequiresExpansion: c.RequiresExpansion, IsComputed: c.IsComputed, NullTest: c.NullTest, PipeStage: c.PipeStage}
@@ -127,7 +127,7 @@ type conditionKey struct {
 func conditionDedupKey(cond Condition, budgets ...*parseBudget) conditionKey {
 	b := budgetFrom(budgets)
 	metadata := metadataIdentity(cond)
-	b.step(len(cond.Field) + len(cond.Value) + len(cond.Operator) + len(cond.ValueReference) + len(cond.DatePart) + len(cond.SourceField) + 1)
+	b.step(len(cond.NumberText) + len(cond.Field) + len(cond.Value) + len(cond.Operator) + len(cond.ValueReference) + len(cond.DatePart) + len(cond.SourceField) + 1)
 	b.output(len(cond.Field)) // possible lowercase field copy
 	metadata.Field = strings.ToLower(cond.Field)
 	var alternatives strings.Builder
@@ -138,5 +138,9 @@ func conditionDedupKey(cond Condition, budgets ...*parseBudget) conditionKey {
 		alternatives.WriteByte(':')
 		alternatives.WriteString(value)
 	}
-	return conditionKey{Metadata: metadata, Value: cond.Value, Alternatives: alternatives.String()}
+	value := cond.Value
+	if cond.NumberText != "" {
+		value = ""
+	} // exact numeric magnitude owns operand identity
+	return conditionKey{Metadata: metadata, Value: value, Alternatives: alternatives.String()}
 }

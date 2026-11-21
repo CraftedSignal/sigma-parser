@@ -33,16 +33,28 @@ func (m orderedMap) get(key string) (any, bool) {
 // 2024-01-02 is a string to match, not a time. An integer too large for
 // int64 and uint64 is a *big.Int, as yaml.v3's float64 would lose digits.
 func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
-	b := budgetFrom(budgets)
+	return decodeOrderedScope(node, budgetFrom(budgets), documentScope)
+}
+
+type yamlScope int
+
+const (
+	ordinaryScope yamlScope = iota
+	documentScope
+	detectionScope
+	numericScope
+)
+
+func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, error) {
 	defer b.visitYAML(node)()
 	switch node.Kind {
 	case yaml.DocumentNode:
 		if len(node.Content) == 0 {
 			return nil, nil
 		}
-		return decodeOrdered(node.Content[0], b)
+		return decodeOrderedScope(node.Content[0], b, scope)
 	case yaml.AliasNode:
-		return decodeOrdered(node.Alias, b)
+		return decodeOrderedScope(node.Alias, b, scope)
 	case yaml.MappingNode:
 		b.node(len(node.Content) / 2)
 		out := make(orderedMap, 0, len(node.Content)/2)
@@ -51,7 +63,20 @@ func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			value, err := decodeOrdered(node.Content[i+1], b)
+			childScope := scope
+			switch scope {
+			case documentScope:
+				childScope = ordinaryScope
+				if key == "detection" {
+					childScope = detectionScope
+				}
+			case detectionScope:
+				childScope = numericScope
+				if strings.EqualFold(key, "condition") || strings.EqualFold(key, "timeframe") {
+					childScope = ordinaryScope
+				}
+			}
+			value, err := decodeOrderedScope(node.Content[i+1], b, childScope)
 			if err != nil {
 				return nil, err
 			}
@@ -62,7 +87,7 @@ func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
 		b.node(len(node.Content))
 		out := make([]any, 0, len(node.Content))
 		for _, child := range node.Content {
-			value, err := decodeOrdered(child, b)
+			value, err := decodeOrderedScope(child, b, scope)
 			if err != nil {
 				return nil, err
 			}
@@ -70,6 +95,9 @@ func decodeOrdered(node *yaml.Node, budgets ...*parseBudget) (any, error) {
 		}
 		return out, nil
 	default:
+		if scope == numericScope && (node.Tag == "!!int" || node.Tag == "!!float") {
+			return decodeNumber(node, b)
+		}
 		if node.Tag == "!!timestamp" {
 			return node.Value, nil
 		}

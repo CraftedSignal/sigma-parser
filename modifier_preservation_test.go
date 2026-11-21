@@ -115,7 +115,7 @@ func TestPublicFlatModifierIdentity(t *testing.T) {
 		{"reference OR literal", "Field|fieldref: Other", "Field: Literal", "or", Condition{Field: "Field", Operator: "=", Value: "Other", ValueReference: "Other"}, Condition{Field: "Field", Operator: "=", Value: "Literal"}},
 		{"reference AND literal", "Field|fieldref: Other", "Field: Other", "and", Condition{Field: "Field", Operator: "=", Value: "Other", ValueReference: "Other"}, Condition{Field: "Field", Operator: "=", Value: "Other"}},
 		{"expansion", "Field: '%X%'", "Field|expand: '%X%'", "and", Condition{Field: "Field", Operator: "=", Value: "%X%"}, Condition{Field: "Field", Operator: "=", Value: "%X%", RequiresExpansion: true}},
-		{"date part", "Field|hour: 5", "Field|minute: 5", "and", Condition{Field: "Field", Operator: "=", Value: "5", DatePart: "hour"}, Condition{Field: "Field", Operator: "=", Value: "5", DatePart: "minute"}},
+		{"date part", "Field|hour: 5", "Field|minute: 5", "and", Condition{Field: "Field", Operator: "=", Value: "5", NumberText: "5", DatePart: "hour"}, Condition{Field: "Field", Operator: "=", Value: "5", NumberText: "5", DatePart: "minute"}},
 		{"multiline AND", "Field|re: '^x$'", "Field|re|m: '^x$'", "and", Condition{Field: "Field", Operator: "matches", Value: "^x$", CaseSensitive: true}, Condition{Field: "Field", Operator: "matches", Value: "^x$", CaseSensitive: true, Multiline: true}},
 		{"case control", "Field: x", "Field|cased: x", "and", Condition{Field: "Field", Operator: "=", Value: "x"}, Condition{Field: "Field", Operator: "=", Value: "x", CaseSensitive: true}},
 	}
