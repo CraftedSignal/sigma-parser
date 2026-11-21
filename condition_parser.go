@@ -200,28 +200,32 @@ func (p *conditionParser) parseAtom() condNode {
 	}
 }
 
-// parsePattern parses the pattern after "of" — identifier, wildcard, or "them".
+// parsePattern parses the pattern after "of": "them", or a search identifier
+// pattern with * anywhere, such as sel_*_x or *_filter. Like pySigma's
+// identifier_pattern it is one word, so it joins the tokens written without
+// a space between them.
 func (p *conditionParser) parsePattern() string {
-	t := p.peek()
-	switch t.typ {
-	case tokThem:
-		p.advance()
-		return "them"
-	case tokStar:
-		p.advance()
-		return "*"
-	case tokIdent:
-		p.advance()
-		// Could be "selection*" (identifier with wildcard)
-		if p.peek().typ == tokStar {
-			p.advance()
-			return t.val + "*"
-		}
-		return t.val
-	default:
-		p.errors = append(p.errors, p.budget.formatError("expected pattern after 'of', got %q", t.val))
-		return ""
+	first := p.peek()
+	var pattern strings.Builder
+	for end := first.pos; patternTokens[p.peek().typ] && p.peek().pos == end; {
+		t := p.advance()
+		pattern.WriteString(t.val)
+		end = t.pos + len(t.val)
 	}
+	switch {
+	case pattern.Len() == 0:
+		p.errors = append(p.errors, p.budget.formatError("expected pattern after 'of', got %q", first.val))
+	case first.typ == tokThem && pattern.Len() == len(first.val):
+		return "them"
+	}
+	return pattern.String()
+}
+
+// patternTokens are the tokens a selector pattern joins: words, numbers and
+// wildcards, and keywords written inside a pattern, as in *and*.
+var patternTokens = map[tokenType]bool{
+	tokIdent: true, tokNumber: true, tokStar: true, tokAnd: true, tokOr: true, tokNot: true,
+	tokOf: true, tokNear: true, tokBy: true, tokThem: true, tokAll: true,
 }
 
 // evaluateAST walks the condition AST and emits Conditions by looking up
