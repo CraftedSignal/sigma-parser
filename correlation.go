@@ -239,6 +239,7 @@ func parseCorrelation(document orderedMap, budgets ...*parseBudget) (*Correlatio
 	c.Generate = documentBool(section, "generate") || documentBool(document, "generate")
 
 	c.Field = documentString(section, "field", b)
+	fieldListRejected := false
 	if raw, ok := section.get("condition"); ok {
 		condition, isMap := raw.(orderedMap)
 		if !isMap {
@@ -247,6 +248,27 @@ func parseCorrelation(document orderedMap, budgets ...*parseBudget) (*Correlatio
 		for _, entry := range condition {
 			b.step(1)
 			if entry.key == "field" {
+				if fields, isList := entry.value.([]any); c.Type == CorrelationValueCount && isList {
+					valid := len(fields) > 0
+					for _, rawField := range fields {
+						b.step(1)
+						field, isString := rawField.(string)
+						if !isString || field == "" {
+							valid = false
+						}
+					}
+					switch {
+					case !valid:
+						fieldListRejected = true
+						fail("value_count condition.field list must contain non-empty strings")
+					case len(fields) > 1:
+						fieldListRejected = true
+						fail("multi-field value_count condition.field is unsupported")
+					default:
+						c.Field = b.formatValue(fields[0])
+					}
+					continue
+				}
 				c.Field = b.formatValue(entry.value)
 				continue
 			}
@@ -277,7 +299,7 @@ func parseCorrelation(document orderedMap, budgets ...*parseBudget) (*Correlatio
 	}
 	needsField := c.Type == CorrelationValueCount || c.Type == CorrelationValueSum ||
 		c.Type == CorrelationValueAvg || c.Type == CorrelationValuePercentile
-	if needsField && c.Field == "" {
+	if needsField && c.Field == "" && !fieldListRejected {
 		fail("%s needs a field", c.Type)
 	}
 	if !needsField && c.Field != "" {

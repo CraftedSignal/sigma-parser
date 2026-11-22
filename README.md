@@ -124,8 +124,15 @@ authored; the parser does not fully validate duration syntax.
 | Tags (MITRE ATT&CK) | Supported |
 | Multiple condition strings | Supported |
 | Rule collections (action global/reset/repeat) | Supported; `ExtractFile` returns each rule |
-| Correlation rules, v2.1.0 (all types, aliases, chaining) | Supported; `ExtractFile` resolves references by name or id within the file |
+| Correlation rules, v2.1.0 (all types, aliases, chaining) | Supported with the field-list boundary below; `ExtractFile` resolves references by name or id within the file |
 | Warnings | `Warnings` flags exact command-line values that can only be a parameter, such as `CommandLine: -NoProfile` |
+
+For correlation `value_count`, `condition.field: [User]` has the same field
+identity as scalar `User`. Valid multi-field lists are currently unsupported:
+`ExtractFile` reports this in `Errors` and returns no `Rules` or `Correlations`.
+Empty lists, empty field names, and non-string list members also produce field
+shape diagnostics. A scalar literal such as `'[User Workstation]'` remains a
+literal field name. These diagnostics use the existing string error API.
 
 `ParseResult.Expression` and `SemanticQuery.Expression` carry the resolved
 Boolean groups, including OR between maps in a list and whole-group NOT.
