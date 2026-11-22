@@ -136,7 +136,13 @@ func (p *conditionParser) parseNot() condNode {
 	}
 	defer p.budget.enter()()
 	if p.peek().typ == tokNot {
-		p.advance()
+		t := p.advance()
+		// A complete bare "not" is a reference; otherwise unary NOT keeps
+		// priority. This bounded lookahead never depends on detection names.
+		switch p.peek().typ {
+		case tokEOF, tokRParen, tokPipe:
+			return condNodeRef{name: t.val}
+		}
 		return condNodeNot{child: p.parseNot()}
 	}
 	return p.parseAtom()
@@ -189,7 +195,7 @@ func (p *conditionParser) parseAtom() condNode {
 		p.advance()
 		return condNodeRef{name: ""}
 
-	case tokBy, tokThem:
+	case tokBy, tokThem, tokOf, tokAnd, tokOr:
 		p.advance()
 		return condNodeRef{name: t.val}
 
