@@ -216,7 +216,9 @@ func base64OffsetVariants(value string) []string {
 		case 2:
 			end -= 2
 		}
-		if start < end {
+		if start >= end {
+			out = append(out, "")
+		} else {
 			out = append(out, encoded[start:end])
 		}
 	}
