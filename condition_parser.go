@@ -180,6 +180,15 @@ func (p *conditionParser) parseAtom() condNode {
 		// Just a number reference (unusual but handle)
 		return condNodeRef{name: num}
 
+	case tokFloat:
+		if p.numericIdentifier(t) {
+			p.advance()
+			return condNodeRef{name: t.val}
+		}
+		p.errors = append(p.errors, p.budget.formatError("unexpected token: %q", t.val))
+		p.advance()
+		return condNodeRef{name: ""}
+
 	case tokIdent:
 		p.advance()
 		// "any of" is the same selector as "1 of"; any other word before "of"
@@ -208,7 +217,7 @@ func (p *conditionParser) parseAtom() condNode {
 func (p *conditionParser) parsePattern() string {
 	first := p.peek()
 	var pattern strings.Builder
-	for end := first.pos; patternTokens[p.peek().typ] && p.peek().pos == end; {
+	for end := first.pos; p.peek().pos == end && (patternTokens[p.peek().typ] || p.numericIdentifier(p.peek())); {
 		t := p.advance()
 		pattern.WriteString(t.val)
 		end = t.pos + len(t.val)
@@ -220,6 +229,24 @@ func (p *conditionParser) parsePattern() string {
 		return "them"
 	}
 	return pattern.String()
+}
+
+// numericIdentifier admits a numeric token as a reference only when its entire
+// spelling uses pySigma's identifier alphabet. Decimal points and plus signs
+// remain numeric-only; the lexer still classifies aggregation thresholds.
+func (p *conditionParser) numericIdentifier(t token) bool {
+	if t.typ != tokFloat || t.val == "" {
+		return false
+	}
+	for i := 0; i < len(t.val); i++ {
+		p.budget.step(1)
+		c := t.val[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // patternTokens are the tokens a selector pattern joins: words, numbers and
