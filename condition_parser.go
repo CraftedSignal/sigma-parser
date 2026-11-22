@@ -189,7 +189,7 @@ func (p *conditionParser) parseAtom() condNode {
 		p.advance()
 		return condNodeRef{name: ""}
 
-	case tokBy:
+	case tokBy, tokThem:
 		p.advance()
 		return condNodeRef{name: t.val}
 
