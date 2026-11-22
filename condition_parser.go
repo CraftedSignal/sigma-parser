@@ -189,6 +189,10 @@ func (p *conditionParser) parseAtom() condNode {
 		p.advance()
 		return condNodeRef{name: ""}
 
+	case tokBy:
+		p.advance()
+		return condNodeRef{name: t.val}
+
 	case tokIdent:
 		p.advance()
 		// "any of" is the same selector as "1 of"; any other word before "of"
