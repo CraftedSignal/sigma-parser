@@ -891,11 +891,6 @@ func TestExtractConditions_RejectsNestedValues(t *testing.T) {
           selection:
               DestinationPort: "80"
     condition: selection and burst`,
-		"mapping in keyword list": `
-    keywords:
-        - mimikatz
-        - sekurlsa: logonpasswords
-    condition: keywords`,
 		"list in value list": `
     selection:
         CommandLine:
@@ -916,4 +911,22 @@ func TestExtractConditions_RejectsNestedValues(t *testing.T) {
 			}
 		})
 	}
+	t.Run("mapping in keyword list is a detection OR", func(t *testing.T) {
+		result := ExtractConditions(`title: Mixed
+logsource:
+    product: windows
+detection:
+    keywords:
+        - mimikatz
+        - sekurlsa: logonpasswords
+    condition: keywords
+`)
+		if len(result.Errors) != 0 || result.Expression == nil || result.Expression.Kind != ExpressionOr || len(result.Expression.Children) != 2 || len(result.Conditions) != 2 {
+			t.Fatalf("mixed detection list must preserve OR members: %+v", result)
+		}
+		first, second := result.Conditions[0], result.Conditions[1]
+		if first.Field != "" || first.Operator != "keyword" || first.Value != "mimikatz" || second.Field != "sekurlsa" || second.Value != "logonpasswords" || second.LogicalOp != "OR" {
+			t.Fatalf("mixed detection order/roles changed: %+v", result.Conditions)
+		}
+	})
 }

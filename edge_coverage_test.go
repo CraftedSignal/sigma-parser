@@ -181,8 +181,8 @@ func TestDetectionResolutionEdgeBranches(t *testing.T) {
 		t.Fatalf("empty list should diagnose, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
 	}
 	expr, isKeyword, errs := resolveList([]any{orderedMap{{key: "Image", value: "cmd.exe"}}, "not-a-map"})
-	if len(expressionLeaves(expr)) != 1 || isKeyword || len(errs) == 0 {
-		t.Fatalf("mixed map list should preserve valid maps and report invalid item, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
+	if len(errs) != 0 || isKeyword || expr.Kind != ExpressionOr || len(expressionLeaves(expr)) != 2 || expressionLeaves(expr)[0].Field != "Image" || expressionLeaves(expr)[1].Operator != "keyword" || expressionLeaves(expr)[1].Value != "not-a-map" {
+		t.Fatalf("mixed detection list should OR its map and keyword, expr=%#v keyword=%v errors=%v", expr, isKeyword, errs)
 	}
 	expr, isKeyword, errs = resolveList([]any{"mimikatz", "sekurlsa"})
 	if len(errs) != 0 || !isKeyword || len(expressionLeaves(expr)) != 1 || len(expressionLeaves(expr)[0].Alternatives) != 2 {

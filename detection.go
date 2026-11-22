@@ -79,14 +79,22 @@ func resolveFieldMap(m orderedMap, budgets ...*parseBudget) (*Expression, []*Exp
 	return compactExpression(ExpressionAnd, children), units, errs
 }
 
-// resolveList resolves a list of maps (ORed) or a keyword list.
+// resolveList ORs detection members, retaining the compact all-keyword path.
 func resolveList(list []any, budgets ...*parseBudget) (*Expression, bool, []string) {
 	b := budgetFrom(budgets)
 	b.node(len(list))
 	if len(list) == 0 {
 		return nil, false, []string{b.formatError("empty detection list is not a Sigma selection")}
 	}
-	if _, ok := list[0].(orderedMap); !ok {
+	hasMap := false
+	for _, element := range list {
+		b.step(1)
+		if _, ok := element.(orderedMap); ok {
+			hasMap = true
+			break
+		}
+	}
+	if !hasMap {
 		expr, _, errs := fieldExpression("", list, b)
 		return expr, true, errs
 	}
@@ -94,13 +102,19 @@ func resolveList(list []any, budgets ...*parseBudget) (*Expression, bool, []stri
 	var errs []string
 	for _, element := range list {
 		b.step(1)
-		m, ok := element.(orderedMap)
-		if !ok {
-			errs = append(errs, b.formatError("expected map in list, got %T", element))
-			continue
+		var expr *Expression
+		var memberErrs []string
+		switch member := element.(type) {
+		case orderedMap:
+			expr, _, memberErrs = resolveFieldMap(member, b)
+		case []any:
+			memberErrs = []string{b.formatError("nested detection list is not a valid Sigma selection")}
+		case nil:
+			memberErrs = []string{b.formatError("field %q: null is not allowed in a value list", "")}
+		default:
+			expr, _, memberErrs = fieldExpression("", member, b)
 		}
-		expr, _, mapErrs := resolveFieldMap(m, b)
-		errs = append(errs, mapErrs...)
+		errs = append(errs, memberErrs...)
 		if expr != nil {
 			children = append(children, expr)
 		}
