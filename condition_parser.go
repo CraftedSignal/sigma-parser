@@ -241,8 +241,8 @@ func (p *conditionParser) numericIdentifier(t token) bool {
 	for i := 0; i < len(t.val); i++ {
 		p.budget.step(1)
 		c := t.val[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == '_' || c == '-') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
+			(c < '0' || c > '9') && c != '_' && c != '-' {
 			return false
 		}
 	}
