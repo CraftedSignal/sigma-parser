@@ -142,6 +142,22 @@ func TestAggregation_Near(t *testing.T) {
 	}
 }
 
+func TestAggregation_NearRequiresKeywordBoundary(t *testing.T) {
+	for _, expr := range []string{"nearby selection1 and selection2", "near_selection1 and selection2"} {
+		agg, errs := parseAggregation(expr, "5m")
+		if agg != nil || len(errs) == 0 {
+			t.Errorf("invalid near keyword %q should be rejected, agg=%#v errors=%v", expr, agg, errs)
+		}
+	}
+}
+
+func TestAggregation_NearAcceptsUnicodeWhitespaceBoundary(t *testing.T) {
+	agg, errs := parseAggregation("near\u2003selection1 and selection2", "5m")
+	if len(errs) > 0 || agg == nil || !agg.isNear || len(agg.nearItems) != 2 {
+		t.Fatalf("Unicode whitespace should separate the near keyword, agg=%#v errors=%v", agg, errs)
+	}
+}
+
 func TestAggregation_ToConditions(t *testing.T) {
 	agg := &aggregation{
 		function:   "count",

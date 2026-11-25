@@ -3,6 +3,8 @@ package sigma
 import (
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // aggregation holds parsed aggregation data from a Sigma condition pipe expression.
@@ -35,7 +37,13 @@ func parseAggregation(expr string, timeframe string, budgets ...*parseBudget) (*
 	// Check for "near" aggregation
 	lower := strings.ToLower(expr)
 	if strings.HasPrefix(lower, "near") {
-		return parseNear(expr, timeframe, b)
+		remainder := lower[len("near"):]
+		if remainder == "" {
+			return parseNear(expr, timeframe, b)
+		}
+		if next, _ := utf8.DecodeRuneInString(remainder); unicode.IsSpace(next) {
+			return parseNear(expr, timeframe, b)
+		}
 	}
 
 	return parseFunctionAggregation(expr, b)
