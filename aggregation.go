@@ -184,21 +184,31 @@ func splitOnAnd(s string, budgets ...*parseBudget) []string {
 	b := budgetFrom(budgets)
 	b.step(len(s) + 1)
 	b.output(len(s))
-	lower := strings.ToLower(s)
+	runes := []rune(s)
 	var parts []string
-	for {
+	start := 0
+	for i := 1; i+3 < len(runes); i++ {
+		if !unicode.IsSpace(runes[i-1]) || !isAndWord(runes, i) || !unicode.IsSpace(runes[i+3]) {
+			continue
+		}
 		b.step(1)
 		b.node(1)
-		idx := strings.Index(lower, " and ")
-		if idx < 0 {
-			parts = append(parts, strings.TrimSpace(s))
-			break
-		}
-		parts = append(parts, strings.TrimSpace(s[:idx]))
-		s = s[idx+5:]
-		lower = lower[idx+5:]
+		parts = append(parts, strings.TrimSpace(string(runes[start:i-1])))
+		start = i + 4
+		i += 4
 	}
+	b.node(1)
+	parts = append(parts, strings.TrimSpace(string(runes[start:])))
 	return parts
+}
+
+func isAndWord(runes []rune, start int) bool {
+	if start+3 > len(runes) {
+		return false
+	}
+	return (runes[start] == 'a' || runes[start] == 'A') &&
+		(runes[start+1] == 'n' || runes[start+1] == 'N') &&
+		(runes[start+2] == 'd' || runes[start+2] == 'D')
 }
 
 // toConditions converts an aggregation into Conditions and metadata.

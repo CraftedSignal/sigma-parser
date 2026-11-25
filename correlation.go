@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // timespanRe is a correlation timespan: a number and a unit.
@@ -501,8 +502,13 @@ func prefixed(label string, errs []string, budgets ...*parseBudget) []string {
 }
 
 func firstWord(s string) string {
-	word, _, _ := strings.Cut(strings.TrimSpace(s), " ")
-	return word
+	s = strings.TrimSpace(s)
+	for i, r := range s {
+		if unicode.IsSpace(r) {
+			return s[:i]
+		}
+	}
+	return s
 }
 
 func firstNonEmpty(values ...string) string {
