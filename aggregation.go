@@ -3,6 +3,8 @@ package sigma
 import (
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // aggregation holds parsed aggregation data from a Sigma condition pipe expression.
@@ -35,7 +37,13 @@ func parseAggregation(expr string, timeframe string, budgets ...*parseBudget) (*
 	// Check for "near" aggregation
 	lower := strings.ToLower(expr)
 	if strings.HasPrefix(lower, "near") {
-		return parseNear(expr, timeframe, b)
+		remainder := lower[len("near"):]
+		if remainder == "" {
+			return parseNear(expr, timeframe, b)
+		}
+		if next, _ := utf8.DecodeRuneInString(remainder); unicode.IsSpace(next) {
+			return parseNear(expr, timeframe, b)
+		}
 	}
 
 	return parseFunctionAggregation(expr, b)
@@ -101,8 +109,10 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	}
 
 	// Parse optional "by field1, field2"
+	emptyGroupBy := false
 	if peek().typ == tokBy {
 		advance() // consume "by"
+		emptyGroupBy = peek().typ == tokComma
 		for {
 			if peek().typ == tokIdent {
 				agg.groupBy = append(agg.groupBy, advance().val)
@@ -139,6 +149,9 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	// Parse threshold value
 	if typ := peek().typ; typ == tokNumber || typ == tokFloat {
 		agg.threshold = advance().val
+	}
+	if next := peek(); next.typ != tokEOF && !(emptyGroupBy && next.typ == tokComma) {
+		errors = append(errors, b.formatError("unexpected token after aggregation: %q", next.val))
 	}
 
 	return agg, errors

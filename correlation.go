@@ -394,7 +394,7 @@ func (n *fileNode) keys() []string {
 	}
 	var keys []string
 	for _, key := range []string{name, id} {
-		if key != "" {
+		if key != "" && (len(keys) == 0 || keys[0] != key) {
 			keys = append(keys, key)
 		}
 	}

@@ -126,6 +126,17 @@ func TestAggregation_AllComparisons(t *testing.T) {
 	}
 }
 
+func TestAggregation_RejectsTrailingTokens(t *testing.T) {
+	for _, expr := range []string{"count() > 5 garbage", "count() > 5 > 10", "count() by src_ip > 5 extra"} {
+		t.Run(expr, func(t *testing.T) {
+			_, errs := parseAggregation(expr, "")
+			if len(errs) == 0 {
+				t.Fatalf("expected trailing tokens in %q to be rejected", expr)
+			}
+		})
+	}
+}
+
 func TestAggregation_Near(t *testing.T) {
 	agg, errs := parseAggregation("near selection1 and selection2", "5m")
 	if len(errs) > 0 {
@@ -139,6 +150,22 @@ func TestAggregation_Near(t *testing.T) {
 	}
 	if agg.nearItems[0] != "selection1" || agg.nearItems[1] != "selection2" {
 		t.Errorf("expected [selection1, selection2], got %v", agg.nearItems)
+	}
+}
+
+func TestAggregation_NearRequiresKeywordBoundary(t *testing.T) {
+	for _, expr := range []string{"nearby selection1 and selection2", "near_selection1 and selection2"} {
+		agg, errs := parseAggregation(expr, "5m")
+		if agg != nil || len(errs) == 0 {
+			t.Errorf("invalid near keyword %q should be rejected, agg=%#v errors=%v", expr, agg, errs)
+		}
+	}
+}
+
+func TestAggregation_NearAcceptsUnicodeWhitespaceBoundary(t *testing.T) {
+	agg, errs := parseAggregation("near\u2003selection1 and selection2", "5m")
+	if len(errs) > 0 || agg == nil || !agg.isNear || len(agg.nearItems) != 2 {
+		t.Fatalf("Unicode whitespace should separate the near keyword, agg=%#v errors=%v", agg, errs)
 	}
 }
 
