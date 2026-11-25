@@ -109,8 +109,10 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	}
 
 	// Parse optional "by field1, field2"
+	emptyGroupBy := false
 	if peek().typ == tokBy {
 		advance() // consume "by"
+		emptyGroupBy = peek().typ == tokComma
 		for {
 			if peek().typ == tokIdent {
 				agg.groupBy = append(agg.groupBy, advance().val)
@@ -147,6 +149,9 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	// Parse threshold value
 	if typ := peek().typ; typ == tokNumber || typ == tokFloat {
 		agg.threshold = advance().val
+	}
+	if next := peek(); next.typ != tokEOF && !(emptyGroupBy && next.typ == tokComma) {
+		errors = append(errors, b.formatError("unexpected token after aggregation: %q", next.val))
 	}
 
 	return agg, errors

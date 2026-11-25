@@ -126,6 +126,17 @@ func TestAggregation_AllComparisons(t *testing.T) {
 	}
 }
 
+func TestAggregation_RejectsTrailingTokens(t *testing.T) {
+	for _, expr := range []string{"count() > 5 garbage", "count() > 5 > 10", "count() by src_ip > 5 extra"} {
+		t.Run(expr, func(t *testing.T) {
+			_, errs := parseAggregation(expr, "")
+			if len(errs) == 0 {
+				t.Fatalf("expected trailing tokens in %q to be rejected", expr)
+			}
+		})
+	}
+}
+
 func TestAggregation_Near(t *testing.T) {
 	agg, errs := parseAggregation("near selection1 and selection2", "5m")
 	if len(errs) > 0 {
