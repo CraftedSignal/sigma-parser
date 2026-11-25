@@ -465,8 +465,11 @@ func nearCorrelation(rule *sigmaRule, result *ParseResult, budgets ...*parseBudg
 	for _, item := range splitOnAnd(strings.TrimSpace(aggregation[len("near"):]), b) {
 		b.step(1)
 		b.node(2 * len(rule.Detection))
-		name, absent := strings.CutPrefix(strings.TrimSpace(item), "not ")
-		name = strings.TrimSpace(name)
+		name := strings.TrimSpace(item)
+		absent := len(name) >= len("not ") && strings.EqualFold(name[:len("not ")], "not ")
+		if absent {
+			name = strings.TrimSpace(name[len("not "):])
+		}
 		if _, defined := rule.Detection.get(name); !defined || name == "condition" || name == "timeframe" {
 			errs = append(errs, b.formatError("rule %q: near references %q, which is not a search identifier of the rule", label, item))
 			continue
