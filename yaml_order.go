@@ -63,9 +63,33 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 		seen := make(map[string]struct{}, len(node.Content)/2)
 		seenCondition, seenTimeframe := false, false
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			key, err := decodeOrderedKey(node.Content[i], b)
+			keyNode := node.Content[i]
+			key, err := decodeOrderedKey(keyNode, b)
 			if err != nil {
 				return nil, err
+			}
+			if keyNode.Tag == "!!merge" {
+				if _, duplicate := seen[key]; duplicate {
+					return nil, fmt.Errorf("duplicate YAML mapping key %q", key)
+				}
+				seen[key] = struct{}{}
+				value, err := decodeOrderedScope(node.Content[i+1], b, scope)
+				if err != nil {
+					return nil, err
+				}
+				sources, err := yamlMergeMappings(value)
+				if err != nil {
+					return nil, err
+				}
+				for _, source := range sources {
+					for _, entry := range source {
+						b.step(1)
+						if orderedMapKeyIndex(out, entry.key, scope) < 0 {
+							out = append(out, entry)
+						}
+					}
+				}
+				continue
 			}
 			_, duplicate := seen[key]
 			if scope == detectionScope {
@@ -108,7 +132,14 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, mapEntry{key: key, value: value})
+			entry := mapEntry{key: key, value: value}
+			if duplicate && scope == correlationConditionScope && key == "field" {
+				out = append(out, entry)
+			} else if index := orderedMapKeyIndex(out, key, scope); index >= 0 {
+				out[index] = entry
+			} else {
+				out = append(out, entry)
+			}
 		}
 		return out, nil
 	case yaml.SequenceNode:
@@ -140,6 +171,39 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 		}
 		return value, nil
 	}
+}
+
+func yamlMergeMappings(value any) ([]orderedMap, error) {
+	switch source := value.(type) {
+	case orderedMap:
+		return []orderedMap{source}, nil
+	case []any:
+		mappings := make([]orderedMap, 0, len(source))
+		for _, value := range source {
+			mapping, ok := value.(orderedMap)
+			if !ok {
+				return nil, fmt.Errorf("YAML merge sequence entries must be mappings")
+			}
+			mappings = append(mappings, mapping)
+		}
+		return mappings, nil
+	default:
+		return nil, fmt.Errorf("YAML merge key value must be a mapping or sequence of mappings")
+	}
+}
+
+func orderedMapKeyIndex(mapping orderedMap, key string, scope yamlScope) int {
+	for i, entry := range mapping {
+		if entry.key == key {
+			return i
+		}
+		if scope == detectionScope &&
+			((strings.EqualFold(entry.key, "condition") && strings.EqualFold(key, "condition")) ||
+				(strings.EqualFold(entry.key, "timeframe") && strings.EqualFold(key, "timeframe"))) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (b *parseBudget) visitYAML(node *yaml.Node) func() {
