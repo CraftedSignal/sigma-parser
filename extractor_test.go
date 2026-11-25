@@ -103,6 +103,34 @@ detection:
 	}
 }
 
+func TestExtractConditions_YAMLMergeKeyInSelection(t *testing.T) {
+	input := `title: Merged selection
+detection:
+    base: &base
+        Image: first.exe
+        User: default
+    fallback: &fallback
+        Image: second.exe
+        User: second
+        ParentImage: parent.exe
+    selection:
+        <<: [*base, *fallback]
+        User: bob
+    condition: selection
+`
+	result := ExtractConditions(input)
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	fields := map[string]string{}
+	for _, condition := range result.Conditions {
+		fields[condition.Field] = condition.Value
+	}
+	if fields["Image"] != "first.exe" || fields["User"] != "bob" || fields["ParentImage"] != "parent.exe" || len(fields) != 3 {
+		t.Fatalf("merged selection fields = %#v, want first-source Image, explicit User, and fallback ParentImage", fields)
+	}
+}
+
 func TestExtractConditions_SelectionAndNotFilter(t *testing.T) {
 	yaml := `
 title: Test Rule

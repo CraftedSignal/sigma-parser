@@ -296,6 +296,25 @@ level: medium
 	}
 }
 
+func TestExtractFileNearAcceptsCaseInsensitiveNot(t *testing.T) {
+	file := ExtractFile(`title: Mixed-case near keywords
+logsource: {category: proxy}
+detection:
+    first: {x: 1}
+    present: {y: 2}
+    absent: {z: 3}
+    condition: first | near present AND NOT absent
+    timeframe: 30s
+`)
+	if len(file.Errors) > 0 || len(file.Correlations) != 1 {
+		t.Fatalf("unexpected file errors %q or correlations %+v", file.Errors, file.Correlations)
+	}
+	refs := file.Correlations[0].Rules
+	if len(refs) != 3 || refs[0].Name != "anchor" || refs[1].Name != "present" || refs[2].Name != "absent" || !refs[2].Absent {
+		t.Fatalf("mixed-case NOT was not preserved as an absent near leg: %+v", refs)
+	}
+}
+
 // File.Errors carries the rules' own errors, naming the rule when the file
 // holds several.
 func TestExtractFileReportsRuleErrors(t *testing.T) {
