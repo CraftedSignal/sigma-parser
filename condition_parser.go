@@ -180,8 +180,11 @@ func (p *conditionParser) parseAtom() condNode {
 		p.advance()
 		if p.peek().typ == tokOf {
 			p.advance()
-			if _, err := strconv.Atoi(num); err != nil {
+			threshold, err := strconv.Atoi(num)
+			if err != nil {
 				p.errors = append(p.errors, "quantifier threshold exceeds supported integer range")
+			} else if threshold == 0 {
+				p.errors = append(p.errors, "quantifier threshold must be greater than zero")
 			}
 			pattern := p.parsePattern()
 			return condNodeQuantifier{quantifier: num, pattern: pattern}
