@@ -69,6 +69,14 @@ func extractConditionsInternal(yamlContent string, budgets ...*parseBudget) *Par
 	if err != nil {
 		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}
 	}
+	return extractConditionsFromRules(rules, b)
+}
+
+func extractConditionsFromRules(rules []*sigmaRule, budgets ...*parseBudget) *ParseResult {
+	b := budgetFrom(budgets)
+	if len(rules) == 0 {
+		return &ParseResult{ComputedFields: make(map[string]string), Errors: []string{"sigma rule missing 'detection' block"}}
+	}
 	result := extractRule(rules[0], b)
 	if len(rules) == 1 {
 		return result
