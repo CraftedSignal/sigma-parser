@@ -296,6 +296,32 @@ level: medium
 	}
 }
 
+func TestExtractFileNearAcceptsTabAfterKeyword(t *testing.T) {
+	file := ExtractFile("title: tabbed near\nlogsource: {category: proxy}\ndetection:\n    first: {x: 1}\n    present: {y: 2}\n    condition: \"first | near\\tpresent\"\n    timeframe: 30s\n")
+	if len(file.Errors) > 0 || len(file.Rules) != 0 || len(file.Correlations) != 1 {
+		t.Fatalf("tab-separated near should produce one correlation, got errors %q, rules %d, correlations %d", file.Errors, len(file.Rules), len(file.Correlations))
+	}
+}
+
+func TestExtractFileNearKeepsUnicodeDetectionNames(t *testing.T) {
+	file := ExtractFile(`title: unicode near
+logsource: {category: proxy}
+detection:
+    first: {x: 1}
+    İx: {y: 2}
+    second: {z: 3}
+    condition: first | near İx and second
+    timeframe: 30s
+`)
+	if len(file.Errors) > 0 || len(file.Rules) != 0 || len(file.Correlations) != 1 {
+		t.Fatalf("Unicode detection name should remain intact in near correlation, got errors %q, rules %d, correlations %d", file.Errors, len(file.Rules), len(file.Correlations))
+	}
+	refs := file.Correlations[0].Rules
+	if len(refs) != 3 || refs[1].Name != "İx" || refs[2].Name != "second" {
+		t.Fatalf("near correlation changed Unicode detection references: %+v", refs)
+	}
+}
+
 func TestExtractFileNearAcceptsCaseInsensitiveNot(t *testing.T) {
 	file := ExtractFile(`title: Mixed-case near keywords
 logsource: {category: proxy}
