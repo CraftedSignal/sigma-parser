@@ -150,7 +150,7 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	if typ := peek().typ; typ == tokNumber || typ == tokFloat {
 		agg.threshold = advance().val
 	}
-	if next := peek(); next.typ != tokEOF && !(emptyGroupBy && next.typ == tokComma) {
+	if next := peek(); next.typ != tokEOF && (!emptyGroupBy || next.typ != tokComma) {
 		errors = append(errors, b.formatError("unexpected token after aggregation: %q", next.val))
 	}
 

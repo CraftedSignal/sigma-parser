@@ -105,7 +105,7 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 					seenTimeframe = true
 				}
 			}
-			if duplicate && !(scope == correlationConditionScope && key == "field") {
+			if duplicate && (scope != correlationConditionScope || key != "field") {
 				return nil, fmt.Errorf("duplicate YAML mapping key %q", key)
 			}
 			seen[key] = struct{}{}
@@ -113,9 +113,10 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 			switch scope {
 			case documentScope:
 				childScope = ordinaryScope
-				if key == "detection" {
+				switch key {
+				case "detection":
 					childScope = detectionScope
-				} else if key == "correlation" {
+				case "correlation":
 					childScope = correlationScope
 				}
 			case detectionScope:

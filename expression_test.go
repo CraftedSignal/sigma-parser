@@ -91,6 +91,36 @@ detection:
 	}
 }
 
+func TestExpressionRejectsOverflowingThreshold(t *testing.T) {
+	result := ExtractConditions(`
+title: Overflowing threshold
+detection:
+  selection_one:
+    Image: one.exe
+  selection_two:
+    Image: two.exe
+  condition: 999999999999999999999999999999 of selection_*
+`)
+	if len(result.Errors) == 0 {
+		t.Fatalf("expected overflowing threshold to be rejected, got expression %#v", result.Expression)
+	}
+}
+
+func TestExpressionRejectsZeroThreshold(t *testing.T) {
+	result := ExtractConditions(`
+title: Zero threshold
+detection:
+  selection_one:
+    Image: one.exe
+  selection_two:
+    Image: two.exe
+  condition: 0 of selection_*
+`)
+	if len(result.Errors) == 0 {
+		t.Fatalf("expected zero threshold to be rejected, got expression %#v", result.Expression)
+	}
+}
+
 func TestExpressionCountsValuesOfSingleSelectionThreshold(t *testing.T) {
 	result := ExtractConditions(`
 title: Two evasive PowerShell flags
