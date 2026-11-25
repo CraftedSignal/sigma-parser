@@ -82,8 +82,14 @@ func AnalyzeQueryContext(ctx context.Context, ruleYAML string) *SemanticQuery {
 }
 
 func analyzeQuery(ruleYAML string, b *parseBudget) *SemanticQuery {
-	semantic := semanticFromExtraction(extractConditionsInternal(ruleYAML, b), b)
-	enrichSemanticQueryFromYAML(semantic, ruleYAML, b)
+	b.input(ruleYAML)
+	rules, err := parseSigmaRules(ruleYAML, b)
+	if err != nil {
+		result := &ParseResult{ComputedFields: make(map[string]string), Errors: []string{err.Error()}}
+		return semanticFromExtraction(result, b)
+	}
+	semantic := semanticFromExtraction(extractConditionsFromRules(rules, b), b)
+	enrichSemanticQueryFromRules(semantic, rules, b)
 	return semantic
 }
 
@@ -124,6 +130,18 @@ func enrichSemanticQueryFromYAML(semantic *SemanticQuery, ruleYAML string, budge
 	if err != nil {
 		return
 	}
+	enrichSemanticQueryFromRules(semantic, rules, b)
+}
+
+func enrichSemanticQueryFromRules(semantic *SemanticQuery, rules []*sigmaRule, budgets ...*parseBudget) {
+	b := budgetFrom(budgets)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if _, ok := recovered.(parseAbort); ok {
+				panic(recovered)
+			}
+		}
+	}()
 	b.node(len(rules))
 	var conditions []*SemanticConditionExpression
 	for i, rule := range rules {
