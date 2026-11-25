@@ -77,6 +77,21 @@ detection:
     condition: selection
     condition: selection
 `,
+		"case-insensitive duplicate condition key": `title: Duplicate condition
+detection:
+    selection:
+        Image: first.exe
+    condition: selection
+    Condition: selection
+`,
+		"case-insensitive duplicate timeframe key": `title: Duplicate timeframe
+detection:
+    selection:
+        Image: first.exe
+    condition: selection
+    timeframe: 5m
+    Timeframe: 10m
+`,
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
