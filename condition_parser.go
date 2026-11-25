@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -179,6 +180,9 @@ func (p *conditionParser) parseAtom() condNode {
 		p.advance()
 		if p.peek().typ == tokOf {
 			p.advance()
+			if _, err := strconv.Atoi(num); err != nil {
+				p.errors = append(p.errors, "quantifier threshold exceeds supported integer range")
+			}
 			pattern := p.parsePattern()
 			return condNodeQuantifier{quantifier: num, pattern: pattern}
 		}
