@@ -60,6 +60,7 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 	case yaml.MappingNode:
 		b.node(len(node.Content) / 2)
 		out := make(orderedMap, 0, len(node.Content)/2)
+		outIndex := make(map[yamlMapIndexKey]int, len(node.Content)/2)
 		seen := make(map[string]struct{}, len(node.Content)/2)
 		seenCondition, seenTimeframe := false, false
 		for i := 0; i+1 < len(node.Content); i += 2 {
@@ -84,7 +85,9 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 				for _, source := range sources {
 					for _, entry := range source {
 						b.step(1)
-						if orderedMapKeyIndex(out, entry.key, scope) < 0 {
+						indexKey := orderedMapIndexKey(entry.key, scope)
+						if _, exists := outIndex[indexKey]; !exists {
+							outIndex[indexKey] = len(out)
 							out = append(out, entry)
 						}
 					}
@@ -133,11 +136,13 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 				return nil, err
 			}
 			entry := mapEntry{key: key, value: value}
+			indexKey := orderedMapIndexKey(key, scope)
 			if duplicate && scope == correlationConditionScope && key == "field" {
 				out = append(out, entry)
-			} else if index := orderedMapKeyIndex(out, key, scope); index >= 0 {
+			} else if index, exists := outIndex[indexKey]; exists {
 				out[index] = entry
 			} else {
+				outIndex[indexKey] = len(out)
 				out = append(out, entry)
 			}
 		}
@@ -192,18 +197,21 @@ func yamlMergeMappings(value any) ([]orderedMap, error) {
 	}
 }
 
-func orderedMapKeyIndex(mapping orderedMap, key string, scope yamlScope) int {
-	for i, entry := range mapping {
-		if entry.key == key {
-			return i
-		}
-		if scope == detectionScope &&
-			((strings.EqualFold(entry.key, "condition") && strings.EqualFold(key, "condition")) ||
-				(strings.EqualFold(entry.key, "timeframe") && strings.EqualFold(key, "timeframe"))) {
-			return i
+type yamlMapIndexKey struct {
+	key     string
+	control string
+}
+
+func orderedMapIndexKey(key string, scope yamlScope) yamlMapIndexKey {
+	if scope == detectionScope {
+		switch {
+		case strings.EqualFold(key, "condition"):
+			return yamlMapIndexKey{control: "condition"}
+		case strings.EqualFold(key, "timeframe"):
+			return yamlMapIndexKey{control: "timeframe"}
 		}
 	}
-	return -1
+	return yamlMapIndexKey{key: key}
 }
 
 func (b *parseBudget) visitYAML(node *yaml.Node) func() {
