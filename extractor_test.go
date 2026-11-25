@@ -58,6 +58,36 @@ detection:
 	}
 }
 
+func TestExtractConditions_RejectsDuplicateYAMLKeys(t *testing.T) {
+	tests := map[string]string{
+		"duplicate document key": `title: Duplicate detection
+detection:
+    selection:
+        Image: first.exe
+    condition: selection
+detection:
+    selection:
+        Image: second.exe
+    condition: selection
+`,
+		"duplicate detection key": `title: Duplicate condition
+detection:
+    selection:
+        Image: first.exe
+    condition: selection
+    condition: selection
+`,
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			result := ExtractConditions(input)
+			if len(result.Errors) == 0 || !strings.Contains(strings.ToLower(strings.Join(result.Errors, " ")), "duplicate") {
+				t.Fatalf("expected duplicate YAML key error, got %v", result.Errors)
+			}
+		})
+	}
+}
+
 func TestExtractConditions_SelectionAndNotFilter(t *testing.T) {
 	yaml := `
 title: Test Rule

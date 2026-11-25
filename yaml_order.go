@@ -43,6 +43,8 @@ const (
 	documentScope
 	detectionScope
 	numericScope
+	correlationScope
+	correlationConditionScope
 )
 
 func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, error) {
@@ -58,23 +60,37 @@ func decodeOrderedScope(node *yaml.Node, b *parseBudget, scope yamlScope) (any, 
 	case yaml.MappingNode:
 		b.node(len(node.Content) / 2)
 		out := make(orderedMap, 0, len(node.Content)/2)
+		seen := make(map[string]struct{}, len(node.Content)/2)
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key, err := decodeOrderedKey(node.Content[i], b)
 			if err != nil {
 				return nil, err
 			}
+			if _, ok := seen[key]; ok && !(scope == correlationConditionScope && key == "field") {
+				return nil, fmt.Errorf("duplicate YAML mapping key %q", key)
+			}
+			seen[key] = struct{}{}
 			childScope := scope
 			switch scope {
 			case documentScope:
 				childScope = ordinaryScope
 				if key == "detection" {
 					childScope = detectionScope
+				} else if key == "correlation" {
+					childScope = correlationScope
 				}
 			case detectionScope:
 				childScope = numericScope
 				if strings.EqualFold(key, "condition") || strings.EqualFold(key, "timeframe") {
 					childScope = ordinaryScope
 				}
+			case correlationScope:
+				childScope = ordinaryScope
+				if key == "condition" {
+					childScope = correlationConditionScope
+				}
+			case correlationConditionScope:
+				childScope = ordinaryScope
 			}
 			value, err := decodeOrderedScope(node.Content[i+1], b, childScope)
 			if err != nil {
