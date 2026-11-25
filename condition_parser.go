@@ -1,7 +1,6 @@
 package sigma
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -397,14 +396,13 @@ func matchDetectionItems(pattern string, items map[string]*detectionItem, budget
 	b.step(b.product(len(pattern)+1, len(items)+1, b.limits.work-b.work, "work"))
 	b.node(strings.Count(pattern, "*") + len(items) + 1)
 	b.output(b.product(len(pattern)+1, 2, b.limits.outputBytes-b.outputBytes, "output bytes"))
-	matcher := selectorPattern(pattern)
 	var names []string
 	for name := range items {
 		b.step(b.product(len(pattern)+1, len(name)+1, b.limits.work-b.work, "work"))
 		if strings.HasPrefix(name, "_") && !strings.HasPrefix(pattern, "_") {
 			continue
 		}
-		if matcher.MatchString(name) {
+		if selectorMatches(pattern, name) {
 			names = append(names, name)
 		}
 	}
@@ -412,15 +410,36 @@ func matchDetectionItems(pattern string, items map[string]*detectionItem, budget
 	return names
 }
 
-func selectorPattern(pattern string) *regexp.Regexp {
+func selectorMatches(pattern, name string) bool {
 	if pattern == "them" {
 		pattern = "*"
 	}
-	parts := strings.Split(pattern, "*")
-	for i, part := range parts {
-		parts[i] = regexp.QuoteMeta(part)
+
+	patternIndex, nameIndex := 0, 0
+	lastStar, retryNameIndex := -1, 0
+	for nameIndex < len(name) {
+		if patternIndex < len(pattern) && pattern[patternIndex] != '*' && pattern[patternIndex] == name[nameIndex] {
+			patternIndex++
+			nameIndex++
+			continue
+		}
+		if patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+			lastStar = patternIndex
+			patternIndex++
+			retryNameIndex = nameIndex
+			continue
+		}
+		if lastStar < 0 {
+			return false
+		}
+		retryNameIndex++
+		nameIndex = retryNameIndex
+		patternIndex = lastStar + 1
 	}
-	return regexp.MustCompile("^" + strings.Join(parts, ".*") + "$")
+	for patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+		patternIndex++
+	}
+	return patternIndex == len(pattern)
 }
 
 // conditionReferenceErrors reports identifiers and selectors in a condition

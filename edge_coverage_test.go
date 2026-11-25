@@ -152,6 +152,22 @@ func TestEvaluateAndExpressionFallbackEdges(t *testing.T) {
 	}
 }
 
+func TestMatchDetectionItemsTreatsSelectorCharactersLiterally(t *testing.T) {
+	items := map[string]*detectionItem{
+		"literal[a].end":  nil,
+		"literalx.end":    nil,
+		"sélection_λ_end": nil,
+	}
+	for pattern, want := range map[string][]string{
+		"literal[a].*":    {"literal[a].end"},
+		"sélection_*_end": {"sélection_λ_end"},
+	} {
+		if got := matchDetectionItems(pattern, items); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("pattern %q matched %v, want %v", pattern, got, want)
+		}
+	}
+}
+
 func TestDetectionConditionParsingEdges(t *testing.T) {
 	if node, _, _, errs := parseDetectionCondition(42); node != nil || len(errs) == 0 {
 		t.Fatalf("expected unsupported condition type diagnostic, node=%#v errors=%v", node, errs)
