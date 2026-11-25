@@ -227,6 +227,29 @@ func TestExtractFileCorrelationErrors(t *testing.T) {
 	}
 }
 
+func TestExtractFileCorrelationReferenceWhenNameEqualsID(t *testing.T) {
+	file := ExtractFile(`title: c
+correlation:
+    type: temporal
+    rules: [same]
+    timespan: 5m
+---
+name: same
+id: same
+logsource: {category: proxy}
+detection:
+    sel:
+        a: b
+    condition: sel
+`)
+	if len(file.Errors) != 0 || len(file.Correlations) != 1 {
+		t.Fatalf("same name and id should identify one rule, got errors %q and correlations %d", file.Errors, len(file.Correlations))
+	}
+	if len(file.Correlations[0].Rules) != 1 || file.Correlations[0].Rules[0].Rule == nil || file.Correlations[0].Rules[0].Name != "same" {
+		t.Fatalf("correlation did not resolve its rule: %+v", file.Correlations[0].Rules)
+	}
+}
+
 // Sigma 1 "near" reads as a temporal correlation of the rule's searches.
 func TestExtractFileNear(t *testing.T) {
 	file := ExtractFile(`title: Mimikatz in memory
