@@ -58,6 +58,20 @@ detection:
 	}
 }
 
+func TestExtractConditionsRejectsNonMappingLogSource(t *testing.T) {
+	rule := `title: Invalid logsource
+logsource: process_creation
+detection:
+    selection:
+        EventID: 1
+    condition: selection
+`
+	result := ExtractConditions(rule)
+	if len(result.Errors) == 0 || !strings.Contains(strings.ToLower(strings.Join(result.Errors, " ")), "logsource") {
+		t.Fatalf("expected invalid logsource diagnostic, got %v", result.Errors)
+	}
+}
+
 func TestExtractConditions_RejectsDuplicateYAMLKeys(t *testing.T) {
 	tests := map[string]string{
 		"duplicate document key": `title: Duplicate detection

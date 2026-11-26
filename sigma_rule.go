@@ -191,7 +191,12 @@ func ruleFromDocument(document orderedMap, budgets ...*parseBudget) (*sigmaRule,
 	rule.Level = documentString(document, "level", b)
 	rule.Tags = documentStrings(document, "tags", b)
 	if value, ok := document.get("logsource"); ok {
-		source, _ := value.(orderedMap)
+		source, ok := value.(orderedMap)
+		if !ok {
+			const diagnostic = "sigma rule 'logsource' must be a mapping"
+			b.output(len(diagnostic))
+			return nil, errors.New(diagnostic)
+		}
 		rule.LogSource = logSource{
 			Category: documentString(source, "category", b),
 			Product:  documentString(source, "product", b),
