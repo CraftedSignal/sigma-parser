@@ -12,7 +12,7 @@ A production-ready Go parser for [Sigma](https://sigmahq.io/) detection rules. E
 - **Every Sigma Modifier** (modifiers appendix v2.1.0): contains, startswith, endswith, all, exists, cased, neq, windash, re with i/m/s, base64, base64offset, utf16le/wide, utf16be, utf16, gt/gte/lt/lte, minute/hour/day/week/month/year, cidr, expand, fieldref
 - **Condition Parser**: Recursive descent for AND/OR/NOT, parentheses, quantifiers (`all of them`, `1 of selection_*`)
 - **Full Aggregation Support**: count/sum/min/max/avg with group-by and comparison operators, near with timeframe
-- **3,100+ Rule Corpus**: Tested against the entire SigmaHQ rule repository
+- **SigmaHQ Rule Corpus**: Tested against the bundled rule repository
 - **Fuzz Tested**: No panics on arbitrary input
 
 ## Installation
@@ -246,7 +246,7 @@ func ExtractFile(yamlContent string) *File
 ## Testing
 
 ```bash
-# Run all tests (including 3,100+ SigmaHQ corpus)
+# Run all tests, including the bundled SigmaHQ corpus
 make test
 
 # Run fuzz tests
@@ -255,6 +255,11 @@ make fuzz
 # Run benchmarks
 make benchmark
 ```
+
+The bundled SigmaHQ rules exercise real detection documents, while focused
+regression tests cover YAML scalar and list values, field modifiers, Boolean
+and quantifier conditions, correlations, and aggregation. The rule corpus
+completes without panics.
 
 ## Contributing
 
