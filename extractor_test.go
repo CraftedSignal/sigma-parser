@@ -71,6 +71,16 @@ detection:
 	}
 }
 
+func TestExtractConditionsRejectsAggregationWithoutComparisonThreshold(t *testing.T) {
+	for _, aggregation := range []string{"count()", "sum(bytes) by host", "count() >", "count() 5"} {
+		rule := "title: Incomplete aggregation\ndetection:\n    selection:\n        EventID: 1\n    condition: selection | " + aggregation + "\n"
+		result := ExtractConditions(rule)
+		if len(result.Errors) == 0 {
+			t.Errorf("expected an error for aggregation %q without a comparison threshold, got %+v", aggregation, result)
+		}
+	}
+}
+
 func TestExtractConditionsRejectsNonMappingLogSource(t *testing.T) {
 	rule := `title: Invalid logsource
 logsource: process_creation
