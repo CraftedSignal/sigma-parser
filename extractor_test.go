@@ -58,6 +58,19 @@ detection:
 	}
 }
 
+func TestExtractConditionsRejectsEmptyAggregationExpression(t *testing.T) {
+	rule := `title: Empty aggregation
+detection:
+    selection:
+        EventID: 1
+    condition: selection |
+`
+	result := ExtractConditions(rule)
+	if len(result.Errors) == 0 {
+		t.Fatalf("expected an error for an empty aggregation expression, got %+v", result)
+	}
+}
+
 func TestExtractConditionsRejectsNonMappingLogSource(t *testing.T) {
 	rule := `title: Invalid logsource
 logsource: process_creation
