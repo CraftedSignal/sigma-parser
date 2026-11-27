@@ -137,6 +137,15 @@ func TestWindashExpandsWordStartFlagsLikePySigma(t *testing.T) {
 	}
 }
 
+func TestWindashTreatsUnicodeNumbersAsWordCharacters(t *testing.T) {
+	for _, value := range []string{"²-x", "Ⅳ-x"} {
+		leaves := expressionLeaves(mustFieldExpression(t, "CommandLine|windash|contains", value))
+		if len(leaves) != 1 || !reflect.DeepEqual(conditionValues(leaves[0]), []string{value}) {
+			t.Errorf("windash expanded an in-word dash in %q: %+v", value, leaves)
+		}
+	}
+}
+
 func TestAllLinksValuesNotTheirExpansions(t *testing.T) {
 	expr := mustFieldExpression(t, "CommandLine|windash|contains|all", []any{" -a ", " -b "})
 	if expr.Kind != ExpressionAnd || len(expr.Children) != 2 {
