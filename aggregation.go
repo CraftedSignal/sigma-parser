@@ -150,6 +150,14 @@ func parseFunctionAggregation(expr string, budgets ...*parseBudget) (*aggregatio
 	if typ := peek().typ; typ == tokNumber || typ == tokFloat {
 		agg.threshold = advance().val
 	}
+	if len(errors) == 0 && !emptyGroupBy {
+		if agg.comparison == "" {
+			errors = append(errors, b.formatError("expected comparison operator in aggregation"))
+		}
+		if agg.threshold == "" {
+			errors = append(errors, b.formatError("expected numeric threshold in aggregation"))
+		}
+	}
 	if next := peek(); next.typ != tokEOF && (!emptyGroupBy || next.typ != tokComma) {
 		errors = append(errors, b.formatError("unexpected token after aggregation: %q", next.val))
 	}

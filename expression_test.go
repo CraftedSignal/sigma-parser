@@ -104,6 +104,9 @@ detection:
 	if len(result.Errors) == 0 {
 		t.Fatalf("expected overflowing threshold to be rejected, got expression %#v", result.Expression)
 	}
+	if result.Expression != nil {
+		t.Fatalf("overflowing threshold produced a semantic expression: %#v", result.Expression)
+	}
 }
 
 func TestExpressionRejectsZeroThreshold(t *testing.T) {
@@ -118,6 +121,9 @@ detection:
 `)
 	if len(result.Errors) == 0 {
 		t.Fatalf("expected zero threshold to be rejected, got expression %#v", result.Expression)
+	}
+	if result.Expression != nil {
+		t.Fatalf("zero threshold produced a semantic expression: %#v", result.Expression)
 	}
 }
 

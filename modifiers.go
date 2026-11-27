@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"strconv"
@@ -71,6 +72,9 @@ func parseFieldSpec(fieldWithMods string, budgets ...*parseBudget) (fieldSpec, [
 	spec := fieldSpec{field: parts[0], budget: b}
 	var errs []string
 	fail := func(format string, args ...any) { errs = append(errs, b.formatError(format, args...)) }
+	if fieldWithMods != "" && spec.field == "" {
+		fail("field name cannot be empty")
+	}
 	for index, raw := range parts[1:] {
 		b.step(1)
 		modifier := strings.ToLower(raw)
@@ -557,8 +561,8 @@ func isNumber(value any) bool {
 	case numberScalar, int, int64, uint64, float64, *big.Int:
 		return true
 	case string:
-		_, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return err == nil
+		number, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return err == nil && !math.IsInf(number, 0) && !math.IsNaN(number)
 	}
 	return false
 }

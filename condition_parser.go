@@ -74,6 +74,9 @@ func parseConditionExpr(condStr string, budgets ...*parseBudget) (condNode, stri
 		// Collect rest of tokens as aggregation expression
 		start := p.peek().pos
 		aggExpr = strings.TrimSpace(condStr[start:])
+		if aggExpr == "" {
+			p.errors = append(p.errors, b.formatError("expected aggregation expression after '|'"))
+		}
 	}
 
 	return node, aggExpr, p.errors

@@ -3,6 +3,7 @@ package sigma
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"slices"
@@ -551,16 +552,29 @@ func documentBool(m orderedMap, key string) bool {
 func number(value any) (float64, bool) {
 	switch v := value.(type) {
 	case int:
-		return float64(v), true
+		return exactIntegerFloat64(big.NewInt(int64(v)))
 	case int64:
-		return float64(v), true
+		return exactIntegerFloat64(big.NewInt(v))
 	case uint64:
-		return float64(v), true
+		return exactIntegerFloat64(new(big.Int).SetUint64(v))
 	case float64:
+		if math.IsInf(v, 0) || math.IsNaN(v) {
+			return 0, false
+		}
 		return v, true
 	case *big.Int:
-		f, _ := v.Float64()
-		return f, true
+		return exactIntegerFloat64(v)
 	}
 	return 0, false
+}
+
+func exactIntegerFloat64(value *big.Int) (float64, bool) {
+	if value == nil {
+		return 0, false
+	}
+	converted, accuracy := value.Float64()
+	if accuracy != big.Exact || math.IsInf(converted, 0) || math.IsNaN(converted) {
+		return 0, false
+	}
+	return converted, true
 }

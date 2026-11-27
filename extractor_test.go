@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -55,6 +56,53 @@ detection:
 	}
 	if !foundCmd {
 		t.Error("missing CommandLine contains condition")
+	}
+}
+
+func TestExtractConditionsRejectsEmptyFieldNames(t *testing.T) {
+	for _, field := range []string{"", "|contains", "|exists"} {
+		rule := fmt.Sprintf("detection:\n  selection:\n    %q: value\n  condition: selection\n", field)
+		result := ExtractConditions(rule)
+		if len(result.Errors) == 0 || result.Expression != nil || len(result.Conditions) != 0 {
+			t.Errorf("empty field name %q was accepted or produced a condition: %+v", field, result)
+		}
+	}
+}
+
+func TestExtractConditionsRejectsEmptyAggregationExpression(t *testing.T) {
+	rule := `title: Empty aggregation
+detection:
+    selection:
+        EventID: 1
+    condition: selection |
+`
+	result := ExtractConditions(rule)
+	if len(result.Errors) == 0 {
+		t.Fatalf("expected an error for an empty aggregation expression, got %+v", result)
+	}
+}
+
+func TestExtractConditionsRejectsAggregationWithoutComparisonThreshold(t *testing.T) {
+	for _, aggregation := range []string{"count()", "sum(bytes) by host", "count() >", "count() 5"} {
+		rule := "title: Incomplete aggregation\ndetection:\n    selection:\n        EventID: 1\n    condition: selection | " + aggregation + "\n"
+		result := ExtractConditions(rule)
+		if len(result.Errors) == 0 {
+			t.Errorf("expected an error for aggregation %q without a comparison threshold, got %+v", aggregation, result)
+		}
+	}
+}
+
+func TestExtractConditionsRejectsNonMappingLogSource(t *testing.T) {
+	rule := `title: Invalid logsource
+logsource: process_creation
+detection:
+    selection:
+        EventID: 1
+    condition: selection
+`
+	result := ExtractConditions(rule)
+	if len(result.Errors) == 0 || !strings.Contains(strings.ToLower(strings.Join(result.Errors, " ")), "logsource") {
+		t.Fatalf("expected invalid logsource diagnostic, got %v", result.Errors)
 	}
 }
 

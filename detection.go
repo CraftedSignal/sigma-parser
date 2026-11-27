@@ -67,6 +67,10 @@ func resolveFieldMap(m orderedMap, budgets ...*parseBudget) (*Expression, []*Exp
 	var errs []string
 	for _, entry := range m {
 		b.step(1)
+		if entry.key == "" {
+			errs = append(errs, b.formatError("field name cannot be empty"))
+			continue
+		}
 		expr, fieldUnits, fieldErrs := fieldExpression(entry.key, entry.value, b)
 		errs = append(errs, fieldErrs...)
 		if expr != nil {
