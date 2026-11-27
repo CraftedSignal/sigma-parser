@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -55,6 +56,16 @@ detection:
 	}
 	if !foundCmd {
 		t.Error("missing CommandLine contains condition")
+	}
+}
+
+func TestExtractConditionsRejectsEmptyFieldNames(t *testing.T) {
+	for _, field := range []string{"", "|contains", "|exists"} {
+		rule := fmt.Sprintf("detection:\n  selection:\n    %q: value\n  condition: selection\n", field)
+		result := ExtractConditions(rule)
+		if len(result.Errors) == 0 || result.Expression != nil || len(result.Conditions) != 0 {
+			t.Errorf("empty field name %q was accepted or produced a condition: %+v", field, result)
+		}
 	}
 }
 
