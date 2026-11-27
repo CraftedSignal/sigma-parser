@@ -68,6 +68,28 @@ func TestTypedNumbersRejectNonfiniteWithoutPartial(t *testing.T) {
 	}
 }
 
+func TestTypedNumbersRejectQuotedNonfiniteNumericOperands(t *testing.T) {
+	for _, value := range []string{"'NaN'", "'Inf'", "'-Infinity'"} {
+		for _, field := range []string{"x|gt", "x|hour"} {
+			rule := "detection:\n  sel: {" + field + ": " + value + "}\n  condition: sel\n"
+			p, s, f := ExtractConditions(rule), AnalyzeQuery(rule), ExtractFile(rule)
+			if len(p.Errors) == 0 || p.Expression != nil || len(p.Conditions) != 0 || len(s.Errors) == 0 || s.Expression != nil || len(s.Conditions) != 0 || len(f.Errors) == 0 {
+				t.Fatalf("%s as %s was accepted or produced a condition: parse=%+v semantic=%+v file=%+v", value, field, p, s, f)
+			}
+			for _, detection := range s.Detections {
+				if len(detection.Conditions) != 0 {
+					t.Fatalf("%s as %s leaked a semantic condition: %+v", value, field, detection)
+				}
+			}
+			for _, parsedRule := range f.Rules {
+				if len(parsedRule.Conditions) != 0 {
+					t.Fatalf("%s as %s leaked a file condition: %+v", value, field, parsedRule)
+				}
+			}
+		}
+	}
+}
+
 func TestTypedNumberCopyBudget(t *testing.T) {
 	c := Condition{Field: "x", Operator: "=", Value: "42", NumberText: "42"}
 	for _, allowance := range []int{6, 5} {
