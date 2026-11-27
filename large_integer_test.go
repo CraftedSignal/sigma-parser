@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -41,5 +42,22 @@ func TestLargeIntegersKeepTheirDigits(t *testing.T) {
 		"  type: event_count\n  rules: [r]\n  timespan: 5m\n  condition: {gte: 18446744073709551616}\n")
 	if len(file.Errors) > 0 || len(file.Correlations) != 1 || file.Correlations[0].Conditions[0].Value != 18446744073709551616 {
 		t.Errorf("correlation threshold of a large integer: errors %q, file %+v", file.Errors, file)
+	}
+}
+
+func TestCorrelationRejectsNonFiniteOrInexactFloat64Thresholds(t *testing.T) {
+	for _, threshold := range []string{"9007199254740993", ".inf", ".nan"} {
+		input := "name: r\ndetection:\n  sel: {A: 1}\n  condition: sel\n---\ntitle: c\ncorrelation:\n" +
+			"  type: event_count\n  rules: [r]\n  timespan: 5m\n  condition: {gte: " + threshold + "}\n"
+		file := ExtractFile(input)
+		if len(file.Errors) == 0 {
+			t.Errorf("threshold %s was accepted despite not being a finite, exactly representable float64", threshold)
+		}
+		if len(file.Correlations) != 0 {
+			t.Errorf("threshold %s produced partial correlation output: %+v", threshold, file.Correlations)
+		}
+		if _, err := json.Marshal(file); err != nil {
+			t.Errorf("error result for threshold %s is not JSON-serializable: %v", threshold, err)
+		}
 	}
 }
