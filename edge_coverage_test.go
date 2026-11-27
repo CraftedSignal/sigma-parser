@@ -124,8 +124,8 @@ func TestEvaluateAndExpressionFallbackEdges(t *testing.T) {
 	if expr := buildExpression(condNodeRef{name: "missing"}, items); expr != nil {
 		t.Fatalf("expected missing expression to be nil, got %#v", expr)
 	}
-	if expr := buildExpression(condNodeQuantifier{quantifier: "many", pattern: "sel_*"}, items); expr == nil || expr.Kind != ExpressionOr {
-		t.Fatalf("invalid quantifier should degrade to OR expression, got %#v", expr)
+	if expr := buildExpression(condNodeQuantifier{quantifier: "many", pattern: "sel_*"}, items); expr != nil {
+		t.Fatalf("invalid quantifier should not produce an expression, got %#v", expr)
 	}
 	emptyItems := map[string]*detectionItem{"empty": {name: "empty"}}
 	if expr := buildExpression(condNodeQuantifier{quantifier: "1", pattern: "empty"}, emptyItems); expr != nil {

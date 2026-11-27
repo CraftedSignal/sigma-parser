@@ -43,7 +43,10 @@ func buildExpression(node condNode, items map[string]*detectionItem, budgets ...
 			return compactExpression(ExpressionAnd, children)
 		}
 		threshold, err := strconv.Atoi(typedNode.quantifier)
-		if err != nil || threshold <= 1 {
+		if err != nil || threshold <= 0 {
+			return nil
+		}
+		if threshold == 1 {
 			return compactExpression(ExpressionOr, children)
 		}
 		if len(names) == 1 && !isWildcardPattern(typedNode.pattern) && len(items[names[0]].units) > 1 {
