@@ -72,6 +72,10 @@ func parseFieldSpec(fieldWithMods string, budgets ...*parseBudget) (fieldSpec, [
 	spec := fieldSpec{field: parts[0], budget: b}
 	var errs []string
 	fail := func(format string, args ...any) { errs = append(errs, b.formatError(format, args...)) }
+	if spec.field == "" && len(parts) > 1 {
+		fail("modifier %q requires a field name", parts[1])
+		return spec, errs
+	}
 	for index, raw := range parts[1:] {
 		b.step(1)
 		modifier := strings.ToLower(raw)

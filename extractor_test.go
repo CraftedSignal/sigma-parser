@@ -71,6 +71,14 @@ detection:
 	}
 }
 
+func TestExtractConditionsRejectsModifierWithoutField(t *testing.T) {
+	rule := "detection:\n  selection:\n    '|contains': value\n  condition: selection\n"
+	result := ExtractConditions(rule)
+	if len(result.Errors) == 0 || result.Expression != nil || len(result.Conditions) != 0 {
+		t.Fatalf("modifier without a field was accepted or produced a keyword condition: %+v", result)
+	}
+}
+
 func TestExtractConditionsRejectsAggregationWithoutComparisonThreshold(t *testing.T) {
 	for _, aggregation := range []string{"count()", "sum(bytes) by host", "count() >", "count() 5"} {
 		rule := "title: Incomplete aggregation\ndetection:\n    selection:\n        EventID: 1\n    condition: selection | " + aggregation + "\n"
